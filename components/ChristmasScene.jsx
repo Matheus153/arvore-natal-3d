@@ -281,6 +281,33 @@ function getTreeData() {
     });
   }
 
+  // --- folhagem extra no topo, perto da estrela ---
+  // (adicionada por último para não alterar a posição das bolas e do pisca-pisca)
+  const topRand = seededRandom(555);
+  for (let y = TREE_TOP - 1.6; y < TREE_TOP - 0.3; y += 0.06) {
+    const R = radiusAt(y);
+    const n = 8;
+    for (let i = 0; i < n; i++) {
+      const theta = (i / n) * Math.PI * 2 + topRand() * 0.8;
+      const lift = -0.15 + topRand() * 0.55; // de levemente caído a levemente para cima
+      const dir = new THREE.Vector3(Math.cos(theta), lift, Math.sin(theta)).normalize();
+      const L = R * (0.85 + topRand() * 0.25) + 0.22;
+      addFrond(new THREE.Vector3(0, y, 0), dir, L, (topRand() - 0.5) * 0.6, 0.66);
+    }
+  }
+  // coroa de brotos em volta da ponta, apontando para cima
+  for (const [h, n, len, spread] of [
+    [TREE_TOP - 0.75, 9, 0.7, 0.55],
+    [TREE_TOP - 0.55, 8, 0.6, 0.45],
+    [TREE_TOP - 0.38, 6, 0.48, 0.3],
+  ]) {
+    for (let i = 0; i < n; i++) {
+      const theta = (i / n) * Math.PI * 2 + topRand() * 0.5;
+      const dir = new THREE.Vector3(Math.cos(theta) * spread, 1, Math.sin(theta) * spread).normalize();
+      addFrond(new THREE.Vector3(0, h, 0), dir, len * (0.85 + topRand() * 0.3), topRand() * 0.8, 0.6);
+    }
+  }
+
   treeCache = { fronds: list, lights, ornaments, wirePoints };
   return treeCache;
 }
