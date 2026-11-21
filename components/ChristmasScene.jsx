@@ -119,6 +119,7 @@ let treeCache = null;
 function getTreeData() {
   if (treeCache) return treeCache;
   const anchors = [];
+  const tips = [];
   const rand = seededRandom(1234);
   const worldUp = new THREE.Vector3(0, 1, 0);
   const golden = Math.PI * (3 - Math.sqrt(5));
@@ -161,6 +162,12 @@ function getTreeData() {
           t,
         });
       }
+      // ponta do ramo (contorno externo real da copa)
+      const tip = base
+        .clone()
+        .addScaledVector(ay, 0.97 * length)
+        .addScaledVector(az, -0.28 * 0.94 * length * 0.7);
+      tips.push({ h: tip.y, ang: Math.atan2(tip.z, tip.x), r: Math.hypot(tip.x, tip.z) });
     }
   };
 
@@ -304,7 +311,26 @@ function getTreeData() {
     }
   }
 
-  // --- fita vermelha enrolada em espiral, com caimento entre os pontos de apoio ---
+  // --- fita vermelha enrolada em espiral, por fora das pontas dos ramos ---
+  const tipEnv = new Map();
+  for (const tp of tips) {
+    const hb = Math.floor(tp.h / H_STEP);
+    const ab = Math.floor(((tp.ang + Math.PI) / (Math.PI * 2)) * A_BINS) % A_BINS;
+    const key = hb + "_" + ab;
+    tipEnv.set(key, Math.max(tipEnv.get(key) || 0, tp.r));
+  }
+  const tipR = (h, ang) => {
+    const hb = Math.floor(h / H_STEP);
+    const ab = Math.floor(((Math.atan2(Math.sin(ang), Math.cos(ang)) + Math.PI) / (Math.PI * 2)) * A_BINS) % A_BINS;
+    let best = 0;
+    for (let dh = -1; dh <= 1; dh++) {
+      for (let da = -1; da <= 1; da++) {
+        const v = tipEnv.get(hb + dh + "_" + ((ab + da + A_BINS) % A_BINS));
+        if (v !== undefined) best = Math.max(best, v);
+      }
+    }
+    return best > 0 ? best : envR(h, ang) * 1.25;
+  };
   const ribbonPoints = [];
   {
     const TURNS_R = 4.5;
@@ -315,7 +341,7 @@ function getTreeData() {
       const ang = s * Math.PI * 2 * TURNS_R + Math.PI / 2;
       const frac = ((s * TURNS_R * HANGS_R) % 1 + 1) % 1;
       const y = minH + 0.12 + s * (maxH - minH - 0.35) - 0.12 * Math.sin(frac * Math.PI);
-      const r = envR(y, ang) * 1.0 + 0.07;
+      const r = tipR(y, ang) * 0.92 + 0.06;
       ribbonPoints.push(new THREE.Vector3(Math.cos(ang) * r, y, Math.sin(ang) * r));
     }
   }
@@ -721,7 +747,7 @@ function FairyLights({ strand = 1 }) {
 function TreeRibbon() {
   const geometry = useMemo(() => {
     const pts = getTreeData().ribbonPoints;
-    const WIDTH = 0.16;
+    const WIDTH = 0.2;
     const positions = [];
     const uvs = [];
     const indices = [];
@@ -762,7 +788,7 @@ function TreeRibbon() {
     canvas.width = 64;
     canvas.height = 64;
     const g = canvas.getContext("2d");
-    g.fillStyle = "#b0101c";
+    g.fillStyle = "#c8101e";
     g.fillRect(0, 0, 64, 64);
     g.fillStyle = "#d4af37";
     g.fillRect(0, 0, 64, 4);
