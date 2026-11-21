@@ -25,7 +25,7 @@ function radiusAt(y) {
   return MAX_RADIUS * Math.pow(1 - s, 1.08);
 }
 
-const ORNAMENT_COLORS = ["#a4161a", "#c9a227", "#d9d9d9", "#7a0c1e", "#b8860b", "#8d99ae"];
+const ORNAMENT_COLORS = ["#b3121b", "#d4a017", "#8e0e14", "#e0b84a", "#c41e3a", "#c9a227", "#c0c0c0"];
 
 /* ---------- Galhos: ramos de pinheiro com textura de agulhas ---------- */
 
@@ -163,10 +163,10 @@ function getTreeData() {
   };
 
   let whorl = 0;
-  for (let y = TREE_BOTTOM; y < TREE_TOP - 0.2; y += 0.13, whorl++) {
+  for (let y = TREE_BOTTOM; y < TREE_TOP - 0.2; y += 0.115, whorl++) {
     const R = radiusAt(y);
     const s = (y - TREE_BOTTOM) / (TREE_TOP - TREE_BOTTOM);
-    const count = Math.max(5, Math.round(R * 6.5));
+    const count = Math.max(6, Math.round(R * 8));
     const droop = 0.1 + (1 - s) * 0.3;
 
     for (let i = 0; i < count; i++) {
@@ -204,7 +204,7 @@ function getTreeData() {
     for (let i = 0; i < count; i++) {
       const theta = ((i + 0.5) / count) * Math.PI * 2 + whorl * golden;
       const dir = new THREE.Vector3(Math.cos(theta), 0.12 + rand() * 0.15, Math.sin(theta)).normalize();
-      addFrond(new THREE.Vector3(0, y + 0.06, 0), dir, R * 0.65 + 0.15, (rand() - 0.5) * 0.6);
+      addFrond(new THREE.Vector3(0, y + 0.06, 0), dir, R * 0.78 + 0.15, (rand() - 0.5) * 0.6);
     }
   }
 
@@ -216,55 +216,72 @@ function getTreeData() {
   }
 
 
-  // --- pisca-pisca: espiral em volta da árvore, cada lâmpada presa ao ramo mais próximo ---
-  const used = new Set();
-  const lights = [];
-  const heights = anchors.map((a) => a.h).sort((a, b) => a - b);
-  const minH = heights[Math.floor(heights.length * 0.03)];
-  const maxH = heights[Math.floor(heights.length * 0.97)];
-  const LIGHT_COUNT = 240;
-  const TURNS = 8;
-  for (let i = 0; i < LIGHT_COUNT; i++) {
-    const s = i / (LIGHT_COUNT - 1);
-    const ty = minH + s * (maxH - minH);
-    const ta = s * Math.PI * 2 * TURNS;
-    let best = -1;
-    let bestCost = Infinity;
-    for (let j = 0; j < anchors.length; j++) {
-      if (used.has(j)) continue;
-      const a = anchors[j];
-      let da = Math.abs(a.ang - Math.atan2(Math.sin(ta), Math.cos(ta)));
-      if (da > Math.PI) da = Math.PI * 2 - da;
-      const cost = ((a.h - ty) * 3) ** 2 + (da * Math.max(a.r, 0.3)) ** 2 + (a.t < 0.6 ? 0.02 : 0);
-      if (cost < bestCost) {
-        bestCost = cost;
-        best = j;
+  // --- contorno real da copa: raio máximo dos ramos por faixa de altura e direção ---
+  const H_STEP = 0.15;
+  const A_BINS = 18;
+  const env = new Map();
+  for (const an of anchors) {
+    if (an.t < 0.8) continue;
+    const hb = Math.floor(an.h / H_STEP);
+    const ab = Math.floor(((an.ang + Math.PI) / (Math.PI * 2)) * A_BINS) % A_BINS;
+    const key = hb + "_" + ab;
+    env.set(key, Math.max(env.get(key) || 0, an.r));
+  }
+  const envR = (h, ang) => {
+    const hb = Math.floor(h / H_STEP);
+    const ab = Math.floor(((Math.atan2(Math.sin(ang), Math.cos(ang)) + Math.PI) / (Math.PI * 2)) * A_BINS) % A_BINS;
+    let sum = 0;
+    let w = 0;
+    for (let dh = -1; dh <= 1; dh++) {
+      for (let da = -1; da <= 1; da++) {
+        const v = env.get(hb + dh + "_" + ((ab + da + A_BINS) % A_BINS));
+        if (v === undefined) continue;
+        const weight = dh === 0 && da === 0 ? 2 : 1;
+        sum += v * weight;
+        w += weight;
       }
     }
-    if (best >= 0) {
-      used.add(best);
-      lights.push({ position: anchors[best].top, phase: rand() * Math.PI * 2 });
-    }
+    return w > 0 ? sum / w : radiusAt(h) * 0.8;
+  };
+  const heights = anchors.map((an) => an.h).sort((x, y) => x - y);
+  const minH = heights[Math.floor(heights.length * 0.04)];
+  const maxH = heights[Math.floor(heights.length * 0.97)];
+
+  // --- pisca-pisca: fio em espiral com "barrigas" entre os pontos onde está preso ---
+  const LIGHT_COUNT = 260;
+  const TURNS = 8;
+  const HANGS_PER_TURN = 5;
+  const wirePoints = [];
+  const lights = [];
+  const SAMPLES = LIGHT_COUNT * 3;
+  for (let i = 0; i <= SAMPLES; i++) {
+    const s = i / SAMPLES;
+    const ang = s * Math.PI * 2 * TURNS;
+    const frac = ((s * TURNS * HANGS_PER_TURN) % 1 + 1) % 1;
+    const y = minH + 0.08 + s * (maxH - minH - 0.15) - 0.07 * Math.sin(frac * Math.PI);
+    const r = envR(y, ang) * 0.99 + 0.03;
+    const p = new THREE.Vector3(Math.cos(ang) * r, y, Math.sin(ang) * r);
+    wirePoints.push(p);
+    if (i % 3 === 0) lights.push({ position: p, phase: rand() * Math.PI * 2 });
   }
 
-  // --- bolas: penduradas embaixo de ramos que não receberam lâmpada ---
+  // --- bolas espalhadas na superfície, majoritariamente vermelhas e douradas ---
   const ornaments = [];
-  const free = anchors
-    .map((a, j) => ({ a, j }))
-    .filter(({ a, j }) => !used.has(j) && a.t === 0.65 && a.h > minH + 0.1 && a.h < maxH - 0.35);
-  const ORNAMENT_COUNT = Math.min(50, free.length);
-  const step = free.length / ORNAMENT_COUNT;
+  const ORNAMENT_COUNT = 64;
   for (let i = 0; i < ORNAMENT_COUNT; i++) {
-    const { a } = free[Math.floor(i * step + rand() * step * 0.8)];
-    const size = 0.07 + rand() * 0.045;
+    const s = (i + 0.5) / ORNAMENT_COUNT;
+    const y = minH + 0.15 + Math.pow(s, 0.85) * (maxH - minH - 0.6);
+    const ang = i * golden * 1.7 + rand() * 0.3;
+    const size = 0.085 + rand() * 0.045 - s * 0.02;
+    const r = envR(y, ang) * 0.97 + size * 0.4;
     ornaments.push({
-      position: [a.under.x, a.under.y - size - 0.04, a.under.z],
+      position: [Math.cos(ang) * r, y - 0.04, Math.sin(ang) * r],
       color: ORNAMENT_COLORS[Math.floor(rand() * ORNAMENT_COLORS.length)],
       size,
     });
   }
 
-  treeCache = { fronds: list, lights, ornaments };
+  treeCache = { fronds: list, lights, ornaments, wirePoints };
   return treeCache;
 }
 
@@ -331,8 +348,8 @@ function Trunk() {
       </mesh>
       {/* preenchimento escuro para não ver "buracos" entre os galhos */}
       <mesh position={[0, (TREE_BOTTOM + TREE_TOP) / 2 - 0.1, 0]}>
-        <coneGeometry args={[MAX_RADIUS * 0.62, TREE_TOP - TREE_BOTTOM, 24]} />
-        <meshStandardMaterial color="#0f2a18" roughness={1} />
+        <coneGeometry args={[MAX_RADIUS * 0.72, TREE_TOP - TREE_BOTTOM, 32]} />
+        <meshStandardMaterial color="#173d22" roughness={1} />
       </mesh>
     </group>
   );
@@ -490,6 +507,10 @@ function FairyLights() {
   const glowRef = useRef();
   const lights = useMemo(() => getTreeData().lights, []);
   const count = lights.length;
+  const wireGeo = useMemo(() => {
+    const curve = new THREE.CatmullRomCurve3(getTreeData().wirePoints);
+    return new THREE.TubeGeometry(curve, getTreeData().wirePoints.length * 2, 0.007, 5, false);
+  }, []);
   const glowTex = useMemo(() => makeBulbGlowTexture(), []);
   const warm = useMemo(() => new THREE.Color("#ffd8a0"), []);
   const tmp = useMemo(() => new THREE.Color(), []);
@@ -528,10 +549,10 @@ function FairyLights() {
     for (let i = 0; i < count; i++) {
       const ph = lights[i].phase;
       const k = 0.7 + 0.3 * Math.sin(t * 1.6 + ph) * Math.sin(t * 0.55 + ph * 1.7);
-      mesh.setColorAt(i, tmp.copy(warm).multiplyScalar(1.6 + 1.2 * k));
-      colors[i * 3] = warm.r * k;
-      colors[i * 3 + 1] = warm.g * k;
-      colors[i * 3 + 2] = warm.b * k;
+      mesh.setColorAt(i, tmp.copy(warm).multiplyScalar(2 + 1.5 * k));
+      colors[i * 3] = warm.r * k * 1.3;
+      colors[i * 3 + 1] = warm.g * k * 1.3;
+      colors[i * 3 + 2] = warm.b * k * 1.3;
     }
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     glow.geometry.attributes.color.needsUpdate = true;
@@ -539,9 +560,14 @@ function FairyLights() {
 
   return (
     <group>
+      {/* fio do pisca-pisca */}
+      <mesh geometry={wireGeo}>
+        <meshStandardMaterial color="#1c2e1a" roughness={0.6} metalness={0.2} />
+      </mesh>
+
       {/* lâmpada */}
       <instancedMesh ref={bulbsRef} args={[undefined, undefined, count]}>
-        <sphereGeometry args={[0.022, 10, 10]} />
+        <sphereGeometry args={[0.03, 10, 10]} />
         <meshBasicMaterial toneMapped={false} />
       </instancedMesh>
 
@@ -553,7 +579,7 @@ function FairyLights() {
         </bufferGeometry>
         <pointsMaterial
           map={glowTex}
-          size={0.28}
+          size={0.4}
           sizeAttenuation
           vertexColors
           transparent
@@ -614,25 +640,222 @@ function TreeSkirt() {
   );
 }
 
+/* ---------- Chão de neve com relevo ---------- */
+
+// Ruído suave 2D (value noise) com semente, somado em várias escalas (fbm)
+function makeNoise(seed) {
+  const rand = seededRandom(seed);
+  const perm = new Uint8Array(512);
+  const vals = new Float32Array(256);
+  for (let i = 0; i < 256; i++) {
+    perm[i] = i;
+    vals[i] = rand();
+  }
+  for (let i = 255; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [perm[i], perm[j]] = [perm[j], perm[i]];
+  }
+  for (let i = 0; i < 256; i++) perm[i + 256] = perm[i];
+  const smooth = (t) => t * t * (3 - 2 * t);
+  const v = (x, y) => vals[perm[(perm[x & 255] + y) & 255]];
+  const noise = (x, y) => {
+    const xi = Math.floor(x);
+    const yi = Math.floor(y);
+    const fx = smooth(x - xi);
+    const fy = smooth(y - yi);
+    const a = v(xi, yi);
+    const b = v(xi + 1, yi);
+    const c = v(xi, yi + 1);
+    const d = v(xi + 1, yi + 1);
+    return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+  };
+  return (x, y, octaves = 4) => {
+    let sum = 0;
+    let amp = 0.5;
+    let freq = 1;
+    for (let o = 0; o < octaves; o++) {
+      sum += amp * (noise(x * freq, y * freq) - 0.5);
+      amp *= 0.5;
+      freq *= 2.03;
+    }
+    return sum;
+  };
+}
+
+const snowNoise = makeNoise(77);
+
+// Altura da neve em (x, z): plana perto da árvore, com montes e ondulações mais longe
+function snowHeight(x, z) {
+  const d = Math.hypot(x, z);
+  const far = THREE.MathUtils.smoothstep(d, 2.8, 7);
+  const dunes = snowNoise(x * 0.12, z * 0.12, 4) * 2.6 + Math.max(0, snowNoise(x * 0.05 + 9, z * 0.05, 2)) * 3;
+  const ripples = snowNoise(x * 0.9, z * 0.9, 3) * 0.12;
+  const fine = snowNoise(x * 3.5, z * 3.5, 2) * 0.025;
+  return far * (dunes + ripples) + fine * (0.4 + far);
+}
+
+// Textura granulada da neve (cor + relevo fino)
+function makeSnowGrainTexture() {
+  const size = 512;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const g = canvas.getContext("2d");
+  g.fillStyle = "#ffffff";
+  g.fillRect(0, 0, size, size);
+  const rand = seededRandom(5);
+  for (let i = 0; i < 9000; i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    const r = 0.6 + rand() * 1.8;
+    const shade = 205 + Math.floor(rand() * 45);
+    g.fillStyle = `rgba(${shade - 8}, ${shade - 3}, ${shade + 10 > 255 ? 255 : shade + 10}, ${0.25 + rand() * 0.4})`;
+    g.beginPath();
+    g.arc(x, y, r, 0, Math.PI * 2);
+    g.fill();
+  }
+  // marcas suaves de vento
+  for (let i = 0; i < 60; i++) {
+    const y = rand() * size;
+    g.strokeStyle = `rgba(190, 200, 220, ${0.05 + rand() * 0.08})`;
+    g.lineWidth = 1 + rand() * 3;
+    g.beginPath();
+    g.moveTo(0, y);
+    g.bezierCurveTo(size * 0.3, y + (rand() - 0.5) * 40, size * 0.7, y + (rand() - 0.5) * 40, size, y);
+    g.stroke();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(14, 14);
+  tex.anisotropy = 8;
+  return tex;
+}
+
 function Ground() {
+  const grain = useMemo(() => makeSnowGrainTexture(), []);
+
+  const geometry = useMemo(() => {
+    const size = 44;
+    const seg = 220;
+    const geo = new THREE.PlaneGeometry(size, size, seg, seg);
+    geo.rotateX(-Math.PI / 2);
+    const pos = geo.attributes.position;
+    const colors = new Float32Array(pos.count * 3);
+    const deep = new THREE.Color("#b9c6dc"); // vales azulados
+    const high = new THREE.Color("#f7f9fc"); // topos claros
+    const c = new THREE.Color();
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const z = pos.getZ(i);
+      const h = snowHeight(x, z);
+      pos.setY(i, h);
+      const k = THREE.MathUtils.clamp(0.55 + h * 0.35, 0, 1);
+      c.copy(deep).lerp(high, k);
+      colors[i * 3] = c.r;
+      colors[i * 3 + 1] = c.g;
+      colors[i * 3 + 2] = c.b;
+    }
+    geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    geo.computeVertexNormals();
+    return geo;
+  }, []);
+
   return (
-    <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-      <circleGeometry args={[14, 64]} />
-      <meshStandardMaterial color="#dfe6f0" roughness={1} />
+    <mesh geometry={geometry} receiveShadow>
+      <meshStandardMaterial
+        vertexColors
+        map={grain}
+        bumpMap={grain}
+        bumpScale={0.6}
+        roughness={0.92}
+        metalness={0}
+      />
     </mesh>
   );
 }
 
-function Snow({ count = 1800 }) {
+// Cristais de gelo cintilando na superfície da neve
+function SnowGlitter({ count = 1400 }) {
   const ref = useRef();
+  const glowTex = useMemo(() => makeRoundTexture(), []);
+  const { positions, colors, phases } = useMemo(() => {
+    const rand = seededRandom(31);
+    const positions = new Float32Array(count * 3);
+    const colors = new Float32Array(count * 3);
+    const phases = new Float32Array(count);
+    for (let i = 0; i < count; i++) {
+      const r = 1.3 + Math.sqrt(rand()) * 12;
+      const a = rand() * Math.PI * 2;
+      const x = Math.cos(a) * r;
+      const z = Math.sin(a) * r;
+      positions[i * 3] = x;
+      positions[i * 3 + 1] = snowHeight(x, z) + 0.015;
+      positions[i * 3 + 2] = z;
+      phases[i] = rand() * Math.PI * 2;
+    }
+    return { positions, colors, phases };
+  }, [count]);
+
+  useFrame((state) => {
+    if (!ref.current) return;
+    const t = state.clock.elapsedTime;
+    const arr = ref.current.geometry.attributes.color.array;
+    for (let i = 0; i < count; i++) {
+      const k = Math.max(0, Math.sin(t * 1.3 + phases[i] * 3)) ** 8;
+      arr[i * 3] = k * 0.9;
+      arr[i * 3 + 1] = k * 0.95;
+      arr[i * 3 + 2] = k;
+    }
+    ref.current.geometry.attributes.color.needsUpdate = true;
+  });
+
+  return (
+    <points ref={ref}>
+      <bufferGeometry>
+        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+        <bufferAttribute attach="attributes-color" args={[colors, 3]} />
+      </bufferGeometry>
+      <pointsMaterial
+        map={glowTex}
+        size={0.07}
+        vertexColors
+        transparent
+        depthWrite={false}
+        blending={THREE.AdditiveBlending}
+        toneMapped={false}
+      />
+    </points>
+  );
+}
+
+// Textura redonda e suave, usada nos flocos e nos cristais (evita "quadradinhos")
+function makeRoundTexture() {
+  const size = 64;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const g = canvas.getContext("2d");
+  const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grad.addColorStop(0, "rgba(255,255,255,1)");
+  grad.addColorStop(0.45, "rgba(255,255,255,0.8)");
+  grad.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = grad;
+  g.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(canvas);
+}
+
+function Snow({ count = 2200 }) {
+  const ref = useRef();
+  const flakeTex = useMemo(() => makeRoundTexture(), []);
   const { positions, speeds } = useMemo(() => {
     const rand = seededRandom(7);
     const positions = new Float32Array(count * 3);
     const speeds = new Float32Array(count);
     for (let i = 0; i < count; i++) {
-      positions[i * 3] = (rand() - 0.5) * 24;
+      positions[i * 3] = (rand() - 0.5) * 26;
       positions[i * 3 + 1] = rand() * 14;
-      positions[i * 3 + 2] = (rand() - 0.5) * 24;
+      positions[i * 3 + 2] = (rand() - 0.5) * 26;
       speeds[i] = 0.25 + rand() * 0.5;
     }
     return { positions, speeds };
@@ -655,7 +878,14 @@ function Snow({ count = 1800 }) {
       <bufferGeometry>
         <bufferAttribute attach="attributes-position" args={[positions, 3]} />
       </bufferGeometry>
-      <pointsMaterial color="#ffffff" size={0.05} transparent opacity={0.8} depthWrite={false} />
+      <pointsMaterial
+        map={flakeTex}
+        color="#ffffff"
+        size={0.08}
+        transparent
+        opacity={0.9}
+        depthWrite={false}
+      />
     </points>
   );
 }
@@ -672,7 +902,7 @@ export default function ChristmasScene() {
         gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping }}
       >
         <color attach="background" args={["#060a1a"]} />
-        <fog attach="fog" args={["#060a1a", 13, 32]} />
+        <fog attach="fog" args={["#060a1a", 14, 38]} />
 
         {/* reflexos gerados localmente (sem baixar HDR) para as bolas e a estrela */}
         <Environment resolution={256}>
@@ -712,6 +942,7 @@ export default function ChristmasScene() {
           <TreeSkirt />
           <Presents />
           <Ground />
+          <SnowGlitter />
           <Snow />
         </group>
 

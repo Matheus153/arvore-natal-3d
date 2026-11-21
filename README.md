@@ -4,7 +4,7 @@ Uma árvore de Natal interativa em 3D, feita com **Next.js** e **React Three Fib
 
 - Pinheiro gerado proceduralmente com ramos curvados e agulhas desenhadas em textura
 - Bolas metálicas com reflexo, estrela dourada lapidada com halo de brilho no topo e pisca-pisca de luz quente cintilando
-- Sombras, neve caindo, céu estrelado, saia da árvore e presentes com laço
+- Chão de neve com relevo, textura granulada e cristais cintilando; neve caindo, céu estrelado, saia da árvore e presentes com laço
 - Câmera interativa: arraste para girar e role para aproximar
 
 ## Tecnologias
