@@ -25,77 +25,182 @@ function radiusAt(y) {
   return MAX_RADIUS * Math.pow(1 - s, 1.08);
 }
 
-const NEEDLE_COLORS = ["#1d4a2a", "#24583a", "#2c6a42", "#1a3f26", "#326f45", "#22513a"];
 const ORNAMENT_COLORS = ["#a4161a", "#c9a227", "#d9d9d9", "#7a0c1e", "#b8860b", "#8d99ae"];
 
-/* ---------- Galhos (milhares de instâncias de "tufos" de agulhas) ---------- */
+/* ---------- Galhos: ramos de pinheiro com textura de agulhas ---------- */
+
+// Desenha um ramo de pinheiro (caule + agulhas) num canvas, com fundo transparente
+function makeFrondTexture() {
+  const W = 256;
+  const H = 512;
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const g = canvas.getContext("2d");
+  const rand = seededRandom(2024);
+  const cx = W / 2;
+  const bottom = H - 6;
+  const top = 8;
+  g.lineCap = "round";
+
+  // agulhas: mais longas no meio do ramo, curtas na base e na ponta
+  for (let i = 0; i < 420; i++) {
+    const t = rand();
+    const y = bottom - t * (bottom - top);
+    const profile = Math.pow(1 - t, 0.55) * Math.min(1, 0.45 + t * 3);
+    const len = 112 * profile * (0.7 + rand() * 0.35);
+    const side = rand() < 0.5 ? -1 : 1;
+    const ang = ((38 + rand() * 28) * Math.PI) / 180; // inclinadas para a ponta
+    const dx = side * Math.sin(ang) * len;
+    const dy = -Math.cos(ang) * len;
+    const light = 16 + rand() * 22;
+    g.strokeStyle = `hsl(${128 + rand() * 22}, ${42 + rand() * 18}%, ${light}%)`;
+    g.lineWidth = 1.6 + rand() * 2;
+    g.beginPath();
+    g.moveTo(cx + side * 1.5, y);
+    // leve curvatura em cada agulha
+    g.quadraticCurveTo(cx + dx * 0.55, y + dy * 0.45 - 3, cx + dx, y + dy);
+    g.stroke();
+  }
+
+  // pontas mais claras (brotos novos)
+  for (let i = 0; i < 90; i++) {
+    const t = 0.55 + rand() * 0.45;
+    const y = bottom - t * (bottom - top);
+    const len = 50 * (1 - t) + 10;
+    const side = rand() < 0.5 ? -1 : 1;
+    const ang = ((30 + rand() * 25) * Math.PI) / 180;
+    g.strokeStyle = `hsl(${105 + rand() * 20}, 45%, ${36 + rand() * 12}%)`;
+    g.lineWidth = 1.4 + rand();
+    g.beginPath();
+    g.moveTo(cx, y);
+    g.lineTo(cx + side * Math.sin(ang) * len, y - Math.cos(ang) * len);
+    g.stroke();
+  }
+
+  // caule afinando até a ponta
+  for (let k = 0; k < 24; k++) {
+    const t0 = k / 24;
+    const t1 = (k + 1) / 24;
+    g.strokeStyle = "#4a3320";
+    g.lineWidth = 6 * (1 - t0) + 1;
+    g.beginPath();
+    g.moveTo(cx, bottom - t0 * (bottom - top));
+    g.lineTo(cx, bottom - t1 * (bottom - top));
+    g.stroke();
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  return tex;
+}
+
+// Plano curvado: o ramo cai em arco e as laterais descem um pouco
+function makeFrondGeometry() {
+  const geo = new THREE.PlaneGeometry(1, 1, 6, 10);
+  geo.translate(0, 0.5, 0);
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    pos.setZ(i, -0.28 * y * y - Math.abs(x) * 0.35);
+  }
+  geo.computeVertexNormals();
+  return geo;
+}
+
+const FROND_TINTS = ["#ffffff", "#e4eedc", "#cfdcc6", "#f0f5e2", "#bfcfb6"];
 
 function Branches() {
   const ref = useRef();
+  const texture = useMemo(() => makeFrondTexture(), []);
+  const geometry = useMemo(() => makeFrondGeometry(), []);
+  const depthMaterial = useMemo(
+    () =>
+      new THREE.MeshDepthMaterial({
+        depthPacking: THREE.RGBADepthPacking,
+        map: texture,
+        alphaTest: 0.5,
+      }),
+    [texture]
+  );
 
   const instances = useMemo(() => {
     const rand = seededRandom(1234);
-    const up = new THREE.Vector3(0, 1, 0);
-    const list = [];
+    const worldUp = new THREE.Vector3(0, 1, 0);
     const golden = Math.PI * (3 - Math.sqrt(5));
-    let whorl = 0;
+    const list = [];
 
-    for (let y = TREE_BOTTOM; y < TREE_TOP - 0.15; y += 0.11, whorl++) {
+    const addFrond = (base, dir, length, roll, width = 0.62) => {
+      const y = dir.clone().normalize();
+      let z = worldUp.clone().addScaledVector(y, -worldUp.dot(y));
+      if (z.lengthSq() < 1e-4) z = new THREE.Vector3(0, 0, 1);
+      z.normalize();
+      const x = new THREE.Vector3().crossVectors(y, z).normalize();
+      const basis = new THREE.Matrix4().makeBasis(x, y, z);
+      const q = new THREE.Quaternion().setFromRotationMatrix(basis);
+      q.premultiply(new THREE.Quaternion().setFromAxisAngle(y, roll));
+      list.push({
+        pos: base.clone(),
+        quat: q,
+        scale: new THREE.Vector3(length * width, length, length * 0.7),
+        tint: FROND_TINTS[Math.floor(rand() * FROND_TINTS.length)],
+      });
+    };
+
+    let whorl = 0;
+    for (let y = TREE_BOTTOM; y < TREE_TOP - 0.2; y += 0.13, whorl++) {
       const R = radiusAt(y);
       const s = (y - TREE_BOTTOM) / (TREE_TOP - TREE_BOTTOM);
-      const count = Math.max(5, Math.round(R * 7));
-      const droop = 0.12 + (1 - s) * 0.35; // galhos de baixo caem mais
+      const count = Math.max(5, Math.round(R * 6.5));
+      const droop = 0.1 + (1 - s) * 0.3;
 
       for (let i = 0; i < count; i++) {
-        const theta = (i / count) * Math.PI * 2 + whorl * golden + (rand() - 0.5) * 0.4;
-        const d = droop + (rand() - 0.5) * 0.15;
+        const theta = (i / count) * Math.PI * 2 + whorl * golden + (rand() - 0.5) * 0.35;
+        const d = droop + (rand() - 0.5) * 0.14;
         const dir = new THREE.Vector3(
           Math.cos(theta) * Math.cos(d),
           -Math.sin(d),
           Math.sin(theta) * Math.cos(d)
         ).normalize();
-        const L = R * (0.88 + rand() * 0.2) + 0.15;
-        const base = new THREE.Vector3(0, y + (rand() - 0.5) * 0.06, 0);
+        const L = R * (0.95 + rand() * 0.18) + 0.2;
+        const base = new THREE.Vector3(0, y + (rand() - 0.5) * 0.05, 0);
 
-        // galho principal
-        list.push({
-          pos: base.clone().addScaledVector(dir, L / 2),
-          quat: new THREE.Quaternion().setFromUnitVectors(up, dir),
-          scale: new THREE.Vector3(0.07 + L * 0.06, L, 0.07 + L * 0.06),
-          color: NEEDLE_COLORS[Math.floor(rand() * NEEDLE_COLORS.length)],
-        });
+        // ramo principal
+        addFrond(base, dir, L, (rand() - 0.5) * 0.4);
 
-        // ramos laterais com agulhas, que dão volume
+        // ramos laterais saindo do principal, para dar volume
         const side = new THREE.Vector3(-Math.sin(theta), 0, Math.cos(theta));
-        const subs = 3 + Math.round(L * 2);
+        const subs = L > 1 ? 4 : 2;
         for (let k = 0; k < subs; k++) {
-          const f = 0.3 + (k / subs) * 0.65 + rand() * 0.05;
-          const p = base.clone().addScaledVector(dir, L * f);
+          const f = 0.25 + (k / subs) * 0.5 + rand() * 0.08;
+          const p = base.clone().addScaledVector(dir, L * f * 0.85);
           const sign = k % 2 === 0 ? 1 : -1;
           const dir2 = dir
             .clone()
-            .multiplyScalar(0.65)
-            .addScaledVector(side, sign * (0.6 + rand() * 0.3))
-            .add(new THREE.Vector3(0, -0.15 - rand() * 0.2, 0))
+            .multiplyScalar(0.75)
+            .addScaledVector(side, sign * (0.5 + rand() * 0.25))
+            .add(new THREE.Vector3(0, -0.05 - rand() * 0.15, 0))
             .normalize();
-          const L2 = Math.max(0.12, L * 0.38 * (1 - f * 0.45));
-          list.push({
-            pos: p.addScaledVector(dir2, L2 / 2),
-            quat: new THREE.Quaternion().setFromUnitVectors(up, dir2),
-            scale: new THREE.Vector3(L2 * 0.32, L2, L2 * 0.32),
-            color: NEEDLE_COLORS[Math.floor(rand() * NEEDLE_COLORS.length)],
-          });
+          addFrond(p, dir2, L * (0.45 - f * 0.15), sign * 0.35, 0.58);
         }
+      }
+
+      // ramos internos mais curtos e levemente para cima, preenchendo a copa
+      for (let i = 0; i < count; i++) {
+        const theta = ((i + 0.5) / count) * Math.PI * 2 + whorl * golden;
+        const dir = new THREE.Vector3(Math.cos(theta), 0.12 + rand() * 0.15, Math.sin(theta)).normalize();
+        addFrond(new THREE.Vector3(0, y + 0.06, 0), dir, R * 0.65 + 0.15, (rand() - 0.5) * 0.6);
       }
     }
 
-    // ponta (broto central)
-    list.push({
-      pos: new THREE.Vector3(0, TREE_TOP - 0.25, 0),
-      quat: new THREE.Quaternion(),
-      scale: new THREE.Vector3(0.09, 0.6, 0.09),
-      color: NEEDLE_COLORS[2],
-    });
+    // ponta da árvore: alguns ramos apontando para cima
+    for (let i = 0; i < 5; i++) {
+      const theta = (i / 5) * Math.PI * 2;
+      const dir = new THREE.Vector3(Math.cos(theta) * 0.35, 1, Math.sin(theta) * 0.35).normalize();
+      addFrond(new THREE.Vector3(0, TREE_TOP - 0.55, 0), dir, 0.55, 0, 0.5);
+    }
 
     return list;
   }, []);
@@ -107,7 +212,7 @@ function Branches() {
     instances.forEach((inst, i) => {
       m.compose(inst.pos, inst.quat, inst.scale);
       mesh.setMatrixAt(i, m);
-      mesh.setColorAt(i, c.set(inst.color));
+      mesh.setColorAt(i, c.set(inst.tint));
     });
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
@@ -115,10 +220,20 @@ function Branches() {
   }, [instances]);
 
   return (
-    <instancedMesh ref={ref} args={[undefined, undefined, instances.length]} castShadow receiveShadow>
-      {/* cone com base em y=-0.5 e ponta em y=+0.5: grosso no tronco, fino na ponta */}
-      <coneGeometry args={[1, 1, 7, 1]} />
-      <meshStandardMaterial roughness={0.85} metalness={0} />
+    <instancedMesh
+      ref={ref}
+      args={[geometry, undefined, instances.length]}
+      customDepthMaterial={depthMaterial}
+      castShadow
+      receiveShadow
+    >
+      <meshStandardMaterial
+        map={texture}
+        alphaTest={0.5}
+        side={THREE.DoubleSide}
+        roughness={0.8}
+        metalness={0}
+      />
     </instancedMesh>
   );
 }
@@ -144,51 +259,100 @@ function Trunk() {
   );
 }
 
-/* ---------- Estrela ---------- */
+/* ---------- Estrela lapidada com halo ---------- */
+
+// Estrela de 5 pontas com faces lapidadas (como um cristal), afinando nas pontas
+function makeStarGeometry(outer = 0.4, inner = 0.17, depth = 0.13) {
+  const ring = [];
+  for (let i = 0; i < 10; i++) {
+    const r = i % 2 === 0 ? outer : inner;
+    const a = (i / 10) * Math.PI * 2 + Math.PI / 2;
+    ring.push(new THREE.Vector3(Math.cos(a) * r, Math.sin(a) * r, 0));
+  }
+  const front = new THREE.Vector3(0, 0, depth);
+  const back = new THREE.Vector3(0, 0, -depth);
+  const verts = [];
+  for (let i = 0; i < 10; i++) {
+    const a = ring[i];
+    const b = ring[(i + 1) % 10];
+    verts.push(front.x, front.y, front.z, a.x, a.y, a.z, b.x, b.y, b.z);
+    verts.push(back.x, back.y, back.z, b.x, b.y, b.z, a.x, a.y, a.z);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+// Textura de brilho suave (gradiente radial) para o halo
+function makeGlowTexture() {
+  const size = 256;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const g = canvas.getContext("2d");
+  const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grad.addColorStop(0, "rgba(255, 236, 180, 0.9)");
+  grad.addColorStop(0.2, "rgba(255, 210, 120, 0.45)");
+  grad.addColorStop(0.5, "rgba(255, 180, 80, 0.12)");
+  grad.addColorStop(1, "rgba(255, 160, 60, 0)");
+  g.fillStyle = grad;
+  g.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
 
 function TopStar() {
-  const ref = useRef();
-
-  const geometry = useMemo(() => {
-    const shape = new THREE.Shape();
-    const points = 5;
-    for (let i = 0; i < points * 2; i++) {
-      const r = i % 2 === 0 ? 0.36 : 0.15;
-      const a = (i / (points * 2)) * Math.PI * 2 + Math.PI / 2;
-      if (i === 0) shape.moveTo(Math.cos(a) * r, Math.sin(a) * r);
-      else shape.lineTo(Math.cos(a) * r, Math.sin(a) * r);
-    }
-    shape.closePath();
-    const geo = new THREE.ExtrudeGeometry(shape, {
-      depth: 0.08,
-      bevelEnabled: true,
-      bevelThickness: 0.04,
-      bevelSize: 0.03,
-      bevelSegments: 3,
-    });
-    geo.center();
-    return geo;
-  }, []);
+  const starRef = useRef();
+  const glowRef = useRef();
+  const starGeo = useMemo(() => makeStarGeometry(), []);
+  const glowTex = useMemo(() => makeGlowTexture(), []);
 
   useFrame((state) => {
-    if (!ref.current) return;
     const t = state.clock.elapsedTime;
-    ref.current.rotation.y = t * 0.6;
-    ref.current.material.emissiveIntensity = 0.9 + Math.sin(t * 2.5) * 0.25;
+    if (starRef.current) {
+      starRef.current.rotation.y = t * 0.45;
+      starRef.current.material.emissiveIntensity = 0.55 + Math.sin(t * 2) * 0.15;
+    }
+    if (glowRef.current) {
+      const s = 1.7 + Math.sin(t * 2) * 0.12;
+      glowRef.current.scale.set(s, s, 1);
+    }
   });
 
   return (
-    <group position={[0, TREE_TOP + 0.22, 0]}>
-      <mesh ref={ref} geometry={geometry} castShadow>
-        <meshStandardMaterial
-          color="#e8c15a"
-          emissive="#ffb84d"
-          emissiveIntensity={0.9}
+    <group position={[0, TREE_TOP + 0.32, 0]}>
+      {/* haste que prende a estrela na ponta */}
+      <mesh position={[0, -0.32, 0]}>
+        <cylinderGeometry args={[0.025, 0.04, 0.3, 10]} />
+        <meshStandardMaterial color="#c9a347" metalness={1} roughness={0.3} />
+      </mesh>
+
+      <mesh ref={starRef} geometry={starGeo} castShadow>
+        <meshPhysicalMaterial
+          color="#f2c94c"
+          emissive="#ffae35"
+          emissiveIntensity={0.55}
           metalness={1}
-          roughness={0.2}
+          roughness={0.18}
+          clearcoat={1}
+          clearcoatRoughness={0.1}
+          flatShading
         />
       </mesh>
-      <pointLight color="#ffcf80" intensity={4} distance={4} decay={2} />
+
+      <sprite ref={glowRef} scale={[1.7, 1.7, 1]}>
+        <spriteMaterial
+          map={glowTex}
+          transparent
+          depthWrite={false}
+          blending={THREE.AdditiveBlending}
+          toneMapped={false}
+        />
+      </sprite>
+
+      <pointLight color="#ffcf80" intensity={4} distance={4.5} decay={2} />
     </group>
   );
 }
