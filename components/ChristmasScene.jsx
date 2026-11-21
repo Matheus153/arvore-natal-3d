@@ -200,6 +200,21 @@ function getTreeData() {
       }
     }
 
+    // camada extra de ramos saindo do meio da copa, cobrindo os vãos entre os principais
+    const fillCount = Math.max(4, Math.round(R * 6));
+    for (let i = 0; i < fillCount; i++) {
+      const theta = rand() * Math.PI * 2;
+      const d = droop + 0.08 + (rand() - 0.5) * 0.2;
+      const dir = new THREE.Vector3(
+        Math.cos(theta) * Math.cos(d),
+        -Math.sin(d),
+        Math.sin(theta) * Math.cos(d)
+      ).normalize();
+      const start = R * (0.35 + rand() * 0.1);
+      const base = new THREE.Vector3(Math.cos(theta) * start, y - 0.03 + (rand() - 0.5) * 0.06, Math.sin(theta) * start);
+      addFrond(base, dir, R * (0.6 + rand() * 0.12) + 0.12, (rand() - 0.5) * 0.7, 0.72);
+    }
+
     // ramos internos mais curtos e levemente para cima, preenchendo a copa
     for (let i = 0; i < count; i++) {
       const theta = ((i + 0.5) / count) * Math.PI * 2 + whorl * golden;
@@ -334,7 +349,44 @@ function Branches() {
   );
 }
 
+// Textura contínua de agulhas para o miolo da copa (repete sem emendas visíveis)
+function makeNeedleFillTexture() {
+  const size = 512;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const g = canvas.getContext("2d");
+  g.fillStyle = "#16361f";
+  g.fillRect(0, 0, size, size);
+  const rand = seededRandom(88);
+  g.lineCap = "round";
+  for (let i = 0; i < 5200; i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    const len = 10 + rand() * 22;
+    const ang = Math.PI / 2 + (rand() - 0.5) * 1.6; // agulhas apontando para baixo
+    g.strokeStyle = `hsl(${125 + rand() * 25}, ${40 + rand() * 20}%, ${12 + rand() * 22}%)`;
+    g.lineWidth = 1.5 + rand() * 1.8;
+    // desenha também as cópias nas bordas para o padrão repetir sem costura
+    for (const ox of [-size, 0, size]) {
+      for (const oy of [-size, 0, size]) {
+        g.beginPath();
+        g.moveTo(x + ox, y + oy);
+        g.lineTo(x + ox + Math.cos(ang) * len, y + oy + Math.sin(ang) * len);
+        g.stroke();
+      }
+    }
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(9, 5);
+  tex.anisotropy = 8;
+  return tex;
+}
+
 function Trunk() {
+  const needleFill = useMemo(() => makeNeedleFillTexture(), []);
   return (
     <group>
       <mesh position={[0, 0.45, 0]} castShadow>
@@ -347,9 +399,9 @@ function Trunk() {
         <meshStandardMaterial color="#3d2716" roughness={0.95} />
       </mesh>
       {/* preenchimento escuro para não ver "buracos" entre os galhos */}
-      <mesh position={[0, (TREE_BOTTOM + TREE_TOP) / 2 - 0.1, 0]}>
-        <coneGeometry args={[MAX_RADIUS * 0.72, TREE_TOP - TREE_BOTTOM, 32]} />
-        <meshStandardMaterial color="#173d22" roughness={1} />
+      <mesh position={[0, (TREE_BOTTOM + TREE_TOP) / 2 - 0.2, 0]} receiveShadow>
+        <coneGeometry args={[MAX_RADIUS * 0.8, TREE_TOP - TREE_BOTTOM + 0.1, 48, 8]} />
+        <meshStandardMaterial map={needleFill} bumpMap={needleFill} bumpScale={1.5} roughness={0.9} />
       </mesh>
     </group>
   );
