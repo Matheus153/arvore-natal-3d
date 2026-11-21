@@ -1,11 +1,26 @@
 "use client";
 
-import { useLayoutEffect, useMemo, useRef } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { OrbitControls, Stars, Environment, Lightformer } from "@react-three/drei";
+import { OrbitControls, Stars, Environment, Lightformer, PerformanceMonitor } from "@react-three/drei";
 import { EffectComposer, Bloom, Vignette, ToneMapping, Noise } from "@react-three/postprocessing";
 import { ToneMappingMode, BlendFunction } from "postprocessing";
 import * as THREE from "three";
+
+// Modo leve: ligado em celulares/aparelhos fracos ou quando a animação começa a travar
+const LowQuality = createContext(false);
+
+function detectLowEndDevice() {
+  if (typeof window === "undefined") return false;
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("qualidade") === "alta") return false;
+  if (params.get("qualidade") === "leve") return true;
+  const coarse = window.matchMedia?.("(pointer: coarse)").matches;
+  const smallTouch = navigator.maxTouchPoints > 0 && Math.min(window.innerWidth, window.innerHeight) < 900;
+  const fewCores = (navigator.hardwareConcurrency || 8) <= 4;
+  const lowMemory = (navigator.deviceMemory || 8) <= 4;
+  return Boolean(coarse || smallTouch || fewCores || lowMemory);
+}
 
 // Gerador pseudoaleatório com semente, para a árvore ficar igual a cada carregamento
 function seededRandom(seed) {
@@ -483,6 +498,7 @@ function getTreeData() {
 }
 
 function Branches() {
+  const low = useContext(LowQuality);
   const ref = useRef();
   const texture = useMemo(() => makeFrondTexture(), []);
   const geometry = useMemo(() => makeFrondGeometry(), []);
@@ -531,7 +547,7 @@ function Branches() {
       ref={ref}
       args={[geometry, undefined, instances.length]}
       customDepthMaterial={depthMaterial}
-      castShadow
+      castShadow={!low}
       receiveShadow
     >
       <primitive object={material} attach="material" />
@@ -605,6 +621,7 @@ function makeGlowTexture() {
 }
 
 function TopStar() {
+  const low = useContext(LowQuality);
   const starRef = useRef();
   const glowRef = useRef();
   const starGeo = useMemo(() => makeStarGeometry(), []);
@@ -653,7 +670,7 @@ function TopStar() {
         />
       </sprite>
 
-      <pointLight color="#ffcf80" intensity={4} distance={4.5} decay={2} />
+      {!low && <pointLight color="#ffcf80" intensity={4} distance={4.5} decay={2} />}
     </group>
   );
 }
@@ -1208,6 +1225,7 @@ const REINDEER_LINES = [
 ];
 
 function LitReindeer({ position, rotation = 0, scale = 1, headDown = false }) {
+  const low = useContext(LowQuality);
   const glowRef = useRef();
   const wireRef = useRef();
   const glowTex = useMemo(() => makeBulbGlowTexture(), []);
@@ -1281,7 +1299,7 @@ function LitReindeer({ position, rotation = 0, scale = 1, headDown = false }) {
         />
       </points>
       {/* luz que o cervo projeta na neve */}
-      <pointLight position={[0, 0.8, 0]} intensity={2.5} distance={3} color="#fff1d6" />
+      {!low && <pointLight position={[0, 0.8, 0]} intensity={2.5} distance={3} color="#fff1d6" />}
     </group>
   );
 }
@@ -1801,89 +1819,118 @@ function Moon() {
 /* ---------- Cena ---------- */
 
 export default function ChristmasScene() {
+  // null = ainda detectando (evita desenhar a versão pesada antes de saber o aparelho)
+  const [low, setLow] = useState(null);
+  useEffect(() => setLow(detectLowEndDevice()), []);
+  if (low === null) return <div className="scene" />;
+
   return (
-    <div className="scene">
-      <Canvas
-        shadows="soft"
-        camera={{ position: [6, 4, 8], fov: 42, far: 500 }}
-        dpr={[1, 2]}
-        gl={{ antialias: false }}
-      >
-        <color attach="background" args={["#060a1a"]} />
-        <SkyDome />
-        <Moon />
-        <fog attach="fog" args={["#060a1a", 14, 38]} />
+    <LowQuality.Provider value={low}>
+      <div className="scene">
+        <Canvas
+          shadows={low ? true : "soft"}
+          camera={{ position: [6, 4, 8], fov: 42, far: 500 }}
+          dpr={low ? [1, 1.25] : [1, 2]}
+          gl={{ antialias: false, powerPreference: "high-performance" }}
+        >
+          {/* se a taxa de quadros cair, troca para o modo leve automaticamente */}
+          {!low && <PerformanceMonitor onDecline={() => setLow(true)} />}
 
-        {/* reflexos gerados localmente (sem baixar HDR) para as bolas e a estrela */}
-        <Environment resolution={256}>
-          <Lightformer intensity={2} color="#ffd9a0" position={[0, 4, 5]} scale={[6, 3, 1]} />
-          <Lightformer intensity={1} color="#9fb4ff" position={[-5, 3, -3]} scale={[4, 4, 1]} />
-          <Lightformer intensity={0.8} color="#ffffff" position={[5, 6, -2]} scale={[3, 3, 1]} />
-        </Environment>
+          <color attach="background" args={["#060a1a"]} />
+          <SkyDome />
+          <Moon />
+          <fog attach="fog" args={["#060a1a", 14, 38]} />
 
-        <hemisphereLight args={["#a9b8ff", "#2a2233", 0.35]} />
-        <directionalLight
-          position={[4, 9, 5]}
-          intensity={0.9}
-          color="#c9d4ff"
-          castShadow
-          shadow-mapSize-width={2048}
-          shadow-mapSize-height={2048}
-          shadow-camera-left={-6}
-          shadow-camera-right={6}
-          shadow-camera-top={8}
-          shadow-camera-bottom={-2}
-          shadow-bias={-0.0005}
-        />
-        {/* brilho quente do pisca-pisca sobre a árvore */}
-        <pointLight position={[0, 2.2, 2.2]} intensity={10} distance={6.5} color="#ffb565" />
-        <pointLight position={[0, 0.6, 2.4]} intensity={6} distance={5} color="#ffb565" />
-        <pointLight position={[2.2, 2.6, 0.8]} intensity={5} distance={5} color="#ffc27a" />
-        <pointLight position={[-2.2, 2.8, 1]} intensity={5} distance={5} color="#ffc27a" />
-        <pointLight position={[1.8, 1.2, -1.2]} intensity={4} distance={5} color="#ffb565" />
-        <pointLight position={[-1.8, 1.4, -0.6]} intensity={4} distance={5} color="#ffb565" />
-        <pointLight position={[0, 3.5, -2.5]} intensity={3} distance={6} color="#ffb565" />
+          {/* reflexos gerados localmente (sem baixar HDR) para as bolas e a estrela */}
+          <Environment resolution={low ? 128 : 256}>
+            <Lightformer intensity={2} color="#ffd9a0" position={[0, 4, 5]} scale={[6, 3, 1]} />
+            <Lightformer intensity={1} color="#9fb4ff" position={[-5, 3, -3]} scale={[4, 4, 1]} />
+            <Lightformer intensity={0.8} color="#ffffff" position={[5, 6, -2]} scale={[3, 3, 1]} />
+          </Environment>
 
-        <Stars radius={90} depth={60} count={5000} factor={5} saturation={0.15} fade speed={0.4} />
+          <hemisphereLight args={["#a9b8ff", "#2a2233", low ? 0.45 : 0.35]} />
+          <directionalLight
+            key={low ? "dir-low" : "dir-high"}
+            position={[4, 9, 5]}
+            intensity={0.9}
+            color="#c9d4ff"
+            castShadow
+            shadow-mapSize-width={low ? 1024 : 2048}
+            shadow-mapSize-height={low ? 1024 : 2048}
+            shadow-camera-left={-6}
+            shadow-camera-right={6}
+            shadow-camera-top={8}
+            shadow-camera-bottom={-2}
+            shadow-bias={-0.0005}
+          />
 
-        <group position={[0, -2.4, 0]}>
-          <Trunk />
-          <Branches />
-          <TopStar />
-          <Ornaments />
-          <Decorations />
-          <Bows />
-          <ExtraLights />
-          <Reindeers />
-          <FairyLights strand={1} />
-          <FairyLights strand={2} />
-          <TreeSkirt />
-          <Presents />
-          <Ground />
-          <SnowGlitter />
-          <Snow count={2000} size={0.06} seed={7} />
-          <Snow count={450} size={0.13} seed={8} speed={1.4} />
-        </group>
+          {/* brilho quente do pisca-pisca sobre a árvore */}
+          {low ? (
+            <>
+              <pointLight position={[0, 2.2, 2.6]} intensity={14} distance={8} color="#ffb565" />
+              <pointLight position={[0, 2.6, -2.6]} intensity={8} distance={7} color="#ffb565" />
+            </>
+          ) : (
+            <>
+              <pointLight position={[0, 2.2, 2.2]} intensity={10} distance={6.5} color="#ffb565" />
+              <pointLight position={[0, 0.6, 2.4]} intensity={6} distance={5} color="#ffb565" />
+              <pointLight position={[2.2, 2.6, 0.8]} intensity={5} distance={5} color="#ffc27a" />
+              <pointLight position={[-2.2, 2.8, 1]} intensity={5} distance={5} color="#ffc27a" />
+              <pointLight position={[1.8, 1.2, -1.2]} intensity={4} distance={5} color="#ffb565" />
+              <pointLight position={[-1.8, 1.4, -0.6]} intensity={4} distance={5} color="#ffb565" />
+              <pointLight position={[0, 3.5, -2.5]} intensity={3} distance={6} color="#ffb565" />
+            </>
+          )}
 
-        <OrbitControls
-          enablePan={false}
-          autoRotate
-          autoRotateSpeed={0.1}
-          minDistance={5}
-          maxDistance={18}
-          minPolarAngle={Math.PI / 6}
-          maxPolarAngle={Math.PI / 2.1}
-          target={[0, 0.4, 0]}
-        />
+          <Stars radius={90} depth={60} count={low ? 2500 : 5000} factor={5} saturation={0.15} fade speed={0.4} />
 
-        {/* acabamento de câmera: brilho real das luzes, vinheta e granulação sutil */}
-        <EffectComposer multisampling={4}>
-          <Bloom mipmapBlur luminanceThreshold={1} luminanceSmoothing={0.25} intensity={1.1} radius={0.7} />
-          <Noise opacity={0.025} blendFunction={BlendFunction.SOFT_LIGHT} />
-          <Vignette offset={0.3} darkness={0.55} />
-          <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
-        </EffectComposer>
-      </Canvas>
-    </div>
+          <group position={[0, -2.4, 0]}>
+            <Trunk />
+            <Branches />
+            <TopStar />
+            <Ornaments />
+            <Decorations />
+            <Bows />
+            <ExtraLights />
+            <Reindeers />
+            <FairyLights strand={1} />
+            <FairyLights strand={2} />
+            <TreeSkirt />
+            <Presents />
+            <Ground />
+            <SnowGlitter key={low ? "g-low" : "g-high"} count={low ? 500 : 1400} />
+            <Snow key={low ? "s1-low" : "s1-high"} count={low ? 800 : 2000} size={0.06} seed={7} />
+            <Snow key={low ? "s2-low" : "s2-high"} count={low ? 180 : 450} size={0.13} seed={8} speed={1.4} />
+          </group>
+
+          <OrbitControls
+            enablePan={false}
+            autoRotate
+            autoRotateSpeed={0.1}
+            minDistance={5}
+            maxDistance={18}
+            minPolarAngle={Math.PI / 6}
+            maxPolarAngle={Math.PI / 2.1}
+            target={[0, 0.4, 0]}
+          />
+
+          {/* acabamento de câmera: brilho real das luzes, vinheta e granulação sutil */}
+          {low ? (
+            <EffectComposer key="fx-low" multisampling={0}>
+              <Bloom mipmapBlur luminanceThreshold={1} luminanceSmoothing={0.25} intensity={1} radius={0.6} resolutionScale={0.5} />
+              <Vignette offset={0.3} darkness={0.55} />
+              <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
+            </EffectComposer>
+          ) : (
+            <EffectComposer key="fx-high" multisampling={4}>
+              <Bloom mipmapBlur luminanceThreshold={1} luminanceSmoothing={0.25} intensity={1.1} radius={0.7} />
+              <Noise opacity={0.025} blendFunction={BlendFunction.SOFT_LIGHT} />
+              <Vignette offset={0.3} darkness={0.55} />
+              <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
+            </EffectComposer>
+          )}
+        </Canvas>
+      </div>
+    </LowQuality.Provider>
   );
 }

@@ -26,6 +26,15 @@ npm run dev
 
 Acesse [http://localhost:3000](http://localhost:3000).
 
+## Desempenho em celulares
+
+Em celulares e aparelhos mais fracos a cena entra automaticamente em **modo leve** (menor resolução, menos luzes, sombras mais simples e menos flocos de neve). Se a taxa de quadros cair em qualquer aparelho, o modo leve também é ativado sozinho.
+
+Para forçar um modo, use na URL:
+
+- `?qualidade=leve`
+- `?qualidade=alta`
+
 ## Deploy na Vercel
 
 1. Acesse [vercel.com/new](https://vercel.com/new) e importe este repositório.
