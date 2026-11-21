@@ -397,49 +397,88 @@ function getTreeData() {
     }
   }
 
-  // --- fita vermelha rente à copa ---
-  // os parâmetros ficam guardados para o shader dos ramos esconder as agulhas que passariam na frente dela
-  const ribbon = {
-    turns: 4.5,
-    hangs: 3,
-    phase: Math.PI / 2,
-    minY: minH + 0.12,
-    span: maxH - minH - 0.35,
-    sag: 0.12,
-    width: 0.2,
-    samples: 900,
-  };
-  const ribbonPoints = [];
-  const ribbonRadii = new Float32Array(ribbon.samples + 1);
+  // --- laços presos na árvore ---
+  const bowRand = seededRandom(9001);
+  const bows = [];
   {
-    const N = ribbon.samples;
-    const ys = [];
-    const angs = [];
-    const raw = [];
-    for (let i = 0; i <= N; i++) {
-      const s = i / N;
-      const ang = s * Math.PI * 2 * ribbon.turns + ribbon.phase;
-      const frac = ((s * ribbon.turns * ribbon.hangs) % 1 + 1) % 1;
-      ys.push(ribbon.minY + s * ribbon.span - ribbon.sag * Math.sin(frac * Math.PI));
-      angs.push(ang);
-      raw.push(tipR(ys[i], ang) * 0.9 + 0.05);
-    }
-    // média móvel curta para a fita seguir a copa sem ondular demais
-    const W = 6;
-    for (let i = 0; i <= N; i++) {
-      let sum = 0;
-      let n = 0;
-      for (let k = Math.max(0, i - W); k <= Math.min(N, i + W); k++) {
-        sum += raw[k];
-        n++;
+    const taken2 = [
+      ...ornaments.map((o) => new THREE.Vector3(...o.position)),
+      ...decorations.map((d) => new THREE.Vector3(...d.position)),
+    ];
+    const BOW_COUNT = 18;
+    const BOW_COLORS = ["#b8101c", "#b8101c", "#b8101c", "#d4a017", "#7a0c1e"];
+    for (let i = 0; i < BOW_COUNT; i++) {
+      let placed = null;
+      for (let attempt = 0; attempt < 40 && !placed; attempt++) {
+        const sN = (i + bowRand()) / BOW_COUNT;
+        const y = minH + 0.25 + sN * (maxH - minH - 0.8);
+        const ang = i * 2.399 + bowRand() * 0.6;
+        const r = envR(y, ang) * 0.98 + 0.08;
+        const p = new THREE.Vector3(Math.cos(ang) * r, y, Math.sin(ang) * r);
+        if (taken2.every((q) => q.distanceTo(p) > 0.28)) placed = { p, ang };
       }
-      const r = sum / n;
-      ribbonRadii[i] = r;
-      ribbonPoints.push(new THREE.Vector3(Math.cos(angs[i]) * r, ys[i], Math.sin(angs[i]) * r));
+      if (placed) {
+        taken2.push(placed.p);
+        bows.push({
+          position: [placed.p.x, placed.p.y, placed.p.z],
+          rotY: Math.atan2(Math.cos(placed.ang), Math.sin(placed.ang)),
+          tilt: (bowRand() - 0.5) * 0.35,
+          color: BOW_COLORS[Math.floor(bowRand() * BOW_COLORS.length)],
+          scale: 0.9 + bowRand() * 0.35,
+        });
+      }
     }
   }
 
-  treeCache = { fronds: list, lights, ornaments, wirePoints, lights2, wirePoints2, ribbonPoints, ribbon, ribbonRadii, decorations };
+  // --- novos fios de luz em posições diferentes dos dois espirais existentes ---
+  const lightRand = seededRandom(31337);
+  const extraStrands = [];
+  // (a) espiral no sentido contrário, com lâmpadas coloridas
+  {
+    const MULTI = ["#ff3b3b", "#38d66b", "#3aa0ff", "#ffc93c", "#ff6ad5"];
+    const lightsC = [];
+    const wireC = [];
+    const COUNT = 170;
+    const TURNS_C = 6;
+    const SAMPLES_C = COUNT * 3;
+    for (let i = 0; i <= SAMPLES_C; i++) {
+      const s = i / SAMPLES_C;
+      const ang = -s * Math.PI * 2 * TURNS_C + 0.9;
+      const frac = ((s * TURNS_C * 4) % 1 + 1) % 1;
+      const y = minH + 0.15 + s * (maxH - minH - 0.45) - 0.07 * Math.sin(frac * Math.PI);
+      const r = envR(y, ang) * 0.99 + 0.035;
+      const p = new THREE.Vector3(Math.cos(ang) * r, y, Math.sin(ang) * r);
+      wireC.push(p);
+      if (i % 3 === 0) {
+        lightsC.push({ position: p, phase: lightRand() * Math.PI * 2, color: MULTI[(i / 3) % MULTI.length] });
+      }
+    }
+    extraStrands.push({ lights: lightsC, wirePoints: wireC, size: 0.034, mode: "chase" });
+  }
+  // (b) cascatas verticais descendo do topo, entre as voltas das espirais
+  {
+    const DROPS = 10;
+    for (let j = 0; j < DROPS; j++) {
+      const baseAng = (j / DROPS) * Math.PI * 2 + 0.31;
+      const top = maxH - 0.35 - lightRand() * 0.3;
+      const bottom = minH + 0.1 + lightRand() * 0.4;
+      const lightsV = [];
+      const wireV = [];
+      const SAMPLES_V = 90;
+      for (let i = 0; i <= SAMPLES_V; i++) {
+        const s = i / SAMPLES_V;
+        const y = top - s * (top - bottom);
+        const ang = baseAng + Math.sin(s * Math.PI * 3 + j) * 0.06;
+        const r = envR(y, ang) * 0.99 + 0.03;
+        const p = new THREE.Vector3(Math.cos(ang) * r, y, Math.sin(ang) * r);
+        wireV.push(p);
+        if (i % 3 === 0) lightsV.push({ position: p, phase: s * 6 + j, color: "#fff4e0" });
+      }
+      extraStrands.push({ lights: lightsV, wirePoints: wireV, size: 0.022, mode: "drip" });
+    }
+  }
+
+  treeCache = { fronds: list, lights, ornaments, wirePoints, lights2, wirePoints2, decorations, bows, extraStrands };
   return treeCache;
 }
 
@@ -459,14 +498,8 @@ function Branches() {
 
   const instances = useMemo(() => getTreeData().fronds, []);
 
-  // Material das agulhas: descarta só os pedaços que ficariam na frente da fita vermelha
+  // Material das agulhas
   const material = useMemo(() => {
-    const { ribbon, ribbonRadii } = getTreeData();
-    const radiusTex = new THREE.DataTexture(ribbonRadii, ribbonRadii.length, 1, THREE.RedFormat, THREE.FloatType);
-    radiusTex.minFilter = THREE.NearestFilter;
-    radiusTex.magFilter = THREE.NearestFilter;
-    radiusTex.needsUpdate = true;
-
     const mat = new THREE.MeshStandardMaterial({
       map: texture,
       bumpMap: texture,
@@ -476,55 +509,6 @@ function Branches() {
       roughness: 0.75,
       metalness: 0,
     });
-    mat.onBeforeCompile = (shader) => {
-      shader.uniforms.uRibbonR = { value: radiusTex };
-      shader.uniforms.uTurns = { value: ribbon.turns };
-      shader.uniforms.uHangs = { value: ribbon.hangs };
-      shader.uniforms.uPhase = { value: ribbon.phase };
-      shader.uniforms.uMinY = { value: ribbon.minY };
-      shader.uniforms.uSpan = { value: ribbon.span };
-      shader.uniforms.uSag = { value: ribbon.sag };
-      shader.uniforms.uHalfW = { value: ribbon.width / 2 + 0.03 };
-
-      shader.vertexShader = shader.vertexShader
-        .replace("#include <common>", "#include <common>\nvarying vec3 vTreePos;")
-        .replace(
-          "#include <begin_vertex>",
-          `#include <begin_vertex>
-          vec4 treePos = vec4(transformed, 1.0);
-          #ifdef USE_INSTANCING
-            treePos = instanceMatrix * treePos;
-          #endif
-          vTreePos = treePos.xyz;`
-        );
-
-      shader.fragmentShader = shader.fragmentShader
-        .replace(
-          "#include <common>",
-          `#include <common>
-          varying vec3 vTreePos;
-          uniform sampler2D uRibbonR;
-          uniform float uTurns, uHangs, uPhase, uMinY, uSpan, uSag, uHalfW;`
-        )
-        .replace(
-          "#include <clipping_planes_fragment>",
-          `#include <clipping_planes_fragment>
-          {
-            float ang = atan(vTreePos.z, vTreePos.x);
-            float rr = length(vTreePos.xz);
-            for (int k = 0; k < 6; k++) {
-              float s = (ang - uPhase + 6.28318530718 * float(k)) / (6.28318530718 * uTurns);
-              if (s < 0.0 || s > 1.0) continue;
-              float yr = uMinY + s * uSpan - uSag * sin(fract(s * uTurns * uHangs) * 3.14159265);
-              if (abs(vTreePos.y - yr) < uHalfW) {
-                float rib = texture2D(uRibbonR, vec2(s, 0.5)).r;
-                if (rr > rib - 0.035) discard;
-              }
-            }
-          }`
-        );
-    };
-    mat.customProgramCacheKey = () => "frond-ribbon-cut";
     return mat;
   }, [texture]);
 
@@ -777,12 +761,14 @@ function makeBulbGlowTexture() {
   return tex;
 }
 
-function FairyLights({ strand = 1 }) {
+function FairyLights({ strand = 1, custom = null }) {
   const bulbsRef = useRef();
   const glowRef = useRef();
   const data = getTreeData();
-  const lights = strand === 1 ? data.lights : data.lights2;
-  const wirePoints = strand === 1 ? data.wirePoints : data.wirePoints2;
+  const lights = custom ? custom.lights : strand === 1 ? data.lights : data.lights2;
+  const wirePoints = custom ? custom.wirePoints : strand === 1 ? data.wirePoints : data.wirePoints2;
+  const bulbSize = custom?.size ?? 0.03;
+  const mode = custom?.mode ?? "twinkle";
   const count = lights.length;
   const wireGeo = useMemo(() => {
     const curve = new THREE.CatmullRomCurve3(wirePoints);
@@ -791,6 +777,8 @@ function FairyLights({ strand = 1 }) {
   const glowTex = useMemo(() => makeBulbGlowTexture(), []);
   const warm = useMemo(() => new THREE.Color("#ffd8a0"), []);
   const tmp = useMemo(() => new THREE.Color(), []);
+  // cor própria de cada lâmpada (ou branco quente)
+  const baseColors = useMemo(() => lights.map((l) => (l.color ? new THREE.Color(l.color) : warm)), [lights, warm]);
 
   const { glowPositions, glowColors } = useMemo(() => {
     const glowPositions = new Float32Array(count * 3);
@@ -809,12 +797,12 @@ function FairyLights({ strand = 1 }) {
     lights.forEach((l, i) => {
       m.makeTranslation(l.position.x, l.position.y, l.position.z);
       mesh.setMatrixAt(i, m);
-      mesh.setColorAt(i, warm);
+      mesh.setColorAt(i, baseColors[i]);
     });
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     mesh.material.needsUpdate = true;
-  }, [lights, warm]);
+  }, [lights, baseColors]);
 
   // cintilar suave: cada lâmpada oscila no seu próprio ritmo
   useFrame((state) => {
@@ -825,11 +813,21 @@ function FairyLights({ strand = 1 }) {
     const colors = glow.geometry.attributes.color.array;
     for (let i = 0; i < count; i++) {
       const ph = lights[i].phase;
-      const k = 0.7 + 0.3 * Math.sin(t * 1.6 + ph) * Math.sin(t * 0.55 + ph * 1.7);
-      mesh.setColorAt(i, tmp.copy(warm).multiplyScalar(2.6 + 1.8 * k));
-      colors[i * 3] = warm.r * k * 1.3;
-      colors[i * 3 + 1] = warm.g * k * 1.3;
-      colors[i * 3 + 2] = warm.b * k * 1.3;
+      let k;
+      if (mode === "chase") {
+        // luzes coloridas que "correm" pelo fio
+        k = 0.35 + 0.65 * Math.max(0, Math.sin(t * 3 - i * 0.45)) ** 2;
+      } else if (mode === "drip") {
+        // efeito de gota descendo pela cascata
+        k = 0.3 + 0.7 * Math.max(0, Math.sin(t * 2.4 - ph)) ** 6;
+      } else {
+        k = 0.7 + 0.3 * Math.sin(t * 1.6 + ph) * Math.sin(t * 0.55 + ph * 1.7);
+      }
+      const c = baseColors[i];
+      mesh.setColorAt(i, tmp.copy(c).multiplyScalar(2.6 + 1.8 * k));
+      colors[i * 3] = c.r * k * 1.3;
+      colors[i * 3 + 1] = c.g * k * 1.3;
+      colors[i * 3 + 2] = c.b * k * 1.3;
     }
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     glow.geometry.attributes.color.needsUpdate = true;
@@ -844,7 +842,7 @@ function FairyLights({ strand = 1 }) {
 
       {/* lâmpada */}
       <instancedMesh ref={bulbsRef} args={[undefined, undefined, count]}>
-        <sphereGeometry args={[0.03, 10, 10]} />
+        <sphereGeometry args={[bulbSize, 10, 10]} />
         <meshBasicMaterial toneMapped={false} />
       </instancedMesh>
 
@@ -866,82 +864,6 @@ function FairyLights({ strand = 1 }) {
         />
       </points>
     </group>
-  );
-}
-
-/* ---------- Fita vermelha enrolada na árvore ---------- */
-
-function TreeRibbon() {
-  const geometry = useMemo(() => {
-    const pts = getTreeData().ribbonPoints;
-    const WIDTH = getTreeData().ribbon.width;
-    const positions = [];
-    const uvs = [];
-    const indices = [];
-    const up = new THREE.Vector3();
-    const tangent = new THREE.Vector3();
-    const outward = new THREE.Vector3();
-    let dist = 0;
-    for (let i = 0; i < pts.length; i++) {
-      const prev = pts[Math.max(0, i - 1)];
-      const next = pts[Math.min(pts.length - 1, i + 1)];
-      tangent.subVectors(next, prev).normalize();
-      outward.set(pts[i].x, 0, pts[i].z).normalize();
-      // largura da fita perpendicular ao caminho, quase na vertical, com uma leve torção
-      up.crossVectors(outward, tangent).normalize();
-      const twist = Math.sin(i * 0.05) * 0.25;
-      up.applyAxisAngle(tangent, twist);
-      if (i > 0) dist += pts[i].distanceTo(pts[i - 1]);
-      const half = WIDTH / 2;
-      positions.push(pts[i].x + up.x * half, pts[i].y + up.y * half, pts[i].z + up.z * half);
-      positions.push(pts[i].x - up.x * half, pts[i].y - up.y * half, pts[i].z - up.z * half);
-      uvs.push(dist * 3, 1, dist * 3, 0);
-      if (i < pts.length - 1) {
-        const a = i * 2;
-        indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
-      }
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-    geo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
-    geo.setIndex(indices);
-    geo.computeVertexNormals();
-    return geo;
-  }, []);
-
-  // bordas douradas finas e brilho de cetim
-  const texture = useMemo(() => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 64;
-    canvas.height = 64;
-    const g = canvas.getContext("2d");
-    g.fillStyle = "#c8101e";
-    g.fillRect(0, 0, 64, 64);
-    g.fillStyle = "#d4af37";
-    g.fillRect(0, 0, 64, 4);
-    g.fillRect(0, 60, 64, 4);
-    g.fillStyle = "rgba(255,255,255,0.06)";
-    for (let y = 8; y < 56; y += 4) g.fillRect(0, y, 64, 1);
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.wrapS = THREE.RepeatWrapping;
-    return tex;
-  }, []);
-
-  return (
-    <mesh geometry={geometry} castShadow receiveShadow>
-      <meshPhysicalMaterial
-        map={texture}
-        side={THREE.DoubleSide}
-        roughness={0.32}
-        metalness={0.15}
-        sheen={1}
-        sheenColor="#ff5a6a"
-        sheenRoughness={0.25}
-        clearcoat={0.6}
-        clearcoatRoughness={0.2}
-      />
-    </mesh>
   );
 }
 
@@ -1181,6 +1103,73 @@ function Decorations() {
       {d.kind === "gingerbread" && <Gingerbread />}
     </group>
   ));
+}
+
+/* ---------- Laços de fita presos na árvore ---------- */
+
+function Bow({ color }) {
+  const mat = (
+    <meshPhysicalMaterial
+      color={color}
+      roughness={0.32}
+      metalness={0.1}
+      sheen={1}
+      sheenColor={color}
+      sheenRoughness={0.25}
+      clearcoat={0.5}
+      clearcoatRoughness={0.2}
+      side={THREE.DoubleSide}
+    />
+  );
+  return (
+    <group>
+      {/* alças */}
+      {[-1, 1].map((side) => (
+        <mesh
+          key={side}
+          position={[side * 0.052, 0.012, 0]}
+          rotation={[0, side * 0.35, side * -0.25]}
+          scale={[1.25, 0.8, 0.38]}
+          castShadow
+        >
+          <torusGeometry args={[0.042, 0.013, 12, 32]} />
+          {mat}
+        </mesh>
+      ))}
+      {/* nó central */}
+      <mesh position={[0, 0.006, 0.012]} scale={[1, 0.85, 0.7]} castShadow>
+        <sphereGeometry args={[0.02, 16, 16]} />
+        {mat}
+      </mesh>
+      {/* pontas caídas com corte em "V" */}
+      {[-1, 1].map((side) => (
+        <group key={side} position={[side * 0.012, -0.004, 0.006]} rotation={[0.15, 0, side * 0.42]}>
+          <mesh position={[0, -0.055, 0]} castShadow>
+            <boxGeometry args={[0.026, 0.11, 0.005]} />
+            {mat}
+          </mesh>
+          <mesh position={[side * -0.004, -0.112, 0]} rotation={[0, 0, Math.PI / 4]}>
+            <boxGeometry args={[0.018, 0.018, 0.005]} />
+            {mat}
+          </mesh>
+        </group>
+      ))}
+    </group>
+  );
+}
+
+function Bows() {
+  const bows = useMemo(() => getTreeData().bows, []);
+  return bows.map((b, i) => (
+    <group key={i} position={b.position} rotation={[0, b.rotY, b.tilt]} scale={b.scale}>
+      <Bow color={b.color} />
+    </group>
+  ));
+}
+
+function ExtraLights() {
+  const strands = useMemo(() => getTreeData().extraStrands, []);
+  return strands.map((st, i) => <FairyLights key={i} custom={st} />);
 }
 
 /* ---------- Cervos iluminados (estrutura de arame com luzes) ---------- */
@@ -1862,8 +1851,9 @@ export default function ChristmasScene() {
           <Branches />
           <TopStar />
           <Ornaments />
-          <TreeRibbon />
           <Decorations />
+          <Bows />
+          <ExtraLights />
           <Reindeers />
           <FairyLights strand={1} />
           <FairyLights strand={2} />
