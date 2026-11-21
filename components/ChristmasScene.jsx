@@ -397,87 +397,49 @@ function getTreeData() {
     }
   }
 
-  // --- fita vermelha: calculada depois de TODOS os ramos, passando por fora das agulhas ---
-  // alcance máximo de cada ramo (pontas e bordas laterais), por faixa de altura e direção
-  const reach = new Map();
-  const RB_H = 0.1;
-  const RB_A = 36;
-  const ax = new THREE.Vector3();
-  const ay2 = new THREE.Vector3();
-  const az2 = new THREE.Vector3();
-  const pt = new THREE.Vector3();
-  for (const f of list) {
-    ax.set(1, 0, 0).applyQuaternion(f.quat);
-    ay2.set(0, 1, 0).applyQuaternion(f.quat);
-    az2.set(0, 0, 1).applyQuaternion(f.quat);
-    const L = f.scale.y;
-    const W = f.scale.x;
-    const D = f.scale.z;
-    for (const t of [0.3, 0.5, 0.7, 0.85, 1]) {
-      for (const xs of [-0.5, -0.25, 0, 0.25, 0.5]) {
-        pt.copy(f.pos)
-          .addScaledVector(ax, xs * W)
-          .addScaledVector(ay2, t * L)
-          .addScaledVector(az2, (-0.28 * t * t - Math.abs(xs) * 0.35) * D);
-        const hb = Math.floor(pt.y / RB_H);
-        const ab = Math.floor(((Math.atan2(pt.z, pt.x) + Math.PI) / (Math.PI * 2)) * RB_A) % RB_A;
-        const key = hb + "_" + ab;
-        const r = Math.hypot(pt.x, pt.z);
-        if (r > (reach.get(key) || 0)) reach.set(key, r);
-      }
-    }
-  }
-  const reachAt = (h, ang) => {
-    const hb = Math.floor(h / RB_H);
-    const ab = Math.floor(((Math.atan2(Math.sin(ang), Math.cos(ang)) + Math.PI) / (Math.PI * 2)) * RB_A) % RB_A;
-    let best = 0;
-    // considera a largura da fita (±0.12 na altura) e os vizinhos na direção
-    for (let dh = -2; dh <= 2; dh++) {
-      for (let da = -1; da <= 1; da++) {
-        const v = reach.get(hb + dh + "_" + ((ab + da + RB_A) % RB_A));
-        if (v !== undefined && v > best) best = v;
-      }
-    }
-    return best;
+  // --- fita vermelha rente à copa ---
+  // os parâmetros ficam guardados para o shader dos ramos esconder as agulhas que passariam na frente dela
+  const ribbon = {
+    turns: 4.5,
+    hangs: 3,
+    phase: Math.PI / 2,
+    minY: minH + 0.12,
+    span: maxH - minH - 0.35,
+    sag: 0.12,
+    width: 0.2,
+    samples: 900,
   };
-
   const ribbonPoints = [];
+  const ribbonRadii = new Float32Array(ribbon.samples + 1);
   {
-    const TURNS_R = 4.5;
-    const HANGS_R = 3;
-    const N = 900;
+    const N = ribbon.samples;
     const ys = [];
     const angs = [];
-    const radii = [];
+    const raw = [];
     for (let i = 0; i <= N; i++) {
       const s = i / N;
-      const ang = s * Math.PI * 2 * TURNS_R + Math.PI / 2;
-      const frac = ((s * TURNS_R * HANGS_R) % 1 + 1) % 1;
-      const y = minH + 0.12 + s * (maxH - minH - 0.35) - 0.12 * Math.sin(frac * Math.PI);
-      ys.push(y);
+      const ang = s * Math.PI * 2 * ribbon.turns + ribbon.phase;
+      const frac = ((s * ribbon.turns * ribbon.hangs) % 1 + 1) % 1;
+      ys.push(ribbon.minY + s * ribbon.span - ribbon.sag * Math.sin(frac * Math.PI));
       angs.push(ang);
-      radii.push(Math.max(reachAt(y, ang), tipR(y, ang)) + 0.05);
+      raw.push(tipR(ys[i], ang) * 0.9 + 0.05);
     }
-    // suaviza o raio (máximo e depois média móvel) para a fita não ondular nem entrar nas agulhas
-    const W = 12;
-    const maxed = radii.map((_, i) => {
-      let m = 0;
-      for (let k = Math.max(0, i - W); k <= Math.min(N, i + W); k++) m = Math.max(m, radii[k]);
-      return m;
-    });
+    // média móvel curta para a fita seguir a copa sem ondular demais
+    const W = 6;
     for (let i = 0; i <= N; i++) {
       let sum = 0;
       let n = 0;
       for (let k = Math.max(0, i - W); k <= Math.min(N, i + W); k++) {
-        sum += maxed[k];
+        sum += raw[k];
         n++;
       }
-      const r = Math.max(sum / n, radii[i]);
+      const r = sum / n;
+      ribbonRadii[i] = r;
       ribbonPoints.push(new THREE.Vector3(Math.cos(angs[i]) * r, ys[i], Math.sin(angs[i]) * r));
     }
   }
 
-  treeCache = { fronds: list, lights, ornaments, wirePoints, lights2, wirePoints2, ribbonPoints, decorations };
+  treeCache = { fronds: list, lights, ornaments, wirePoints, lights2, wirePoints2, ribbonPoints, ribbon, ribbonRadii, decorations };
   return treeCache;
 }
 
@@ -496,6 +458,75 @@ function Branches() {
   );
 
   const instances = useMemo(() => getTreeData().fronds, []);
+
+  // Material das agulhas: descarta só os pedaços que ficariam na frente da fita vermelha
+  const material = useMemo(() => {
+    const { ribbon, ribbonRadii } = getTreeData();
+    const radiusTex = new THREE.DataTexture(ribbonRadii, ribbonRadii.length, 1, THREE.RedFormat, THREE.FloatType);
+    radiusTex.minFilter = THREE.NearestFilter;
+    radiusTex.magFilter = THREE.NearestFilter;
+    radiusTex.needsUpdate = true;
+
+    const mat = new THREE.MeshStandardMaterial({
+      map: texture,
+      bumpMap: texture,
+      bumpScale: 2,
+      alphaTest: 0.5,
+      side: THREE.DoubleSide,
+      roughness: 0.75,
+      metalness: 0,
+    });
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms.uRibbonR = { value: radiusTex };
+      shader.uniforms.uTurns = { value: ribbon.turns };
+      shader.uniforms.uHangs = { value: ribbon.hangs };
+      shader.uniforms.uPhase = { value: ribbon.phase };
+      shader.uniforms.uMinY = { value: ribbon.minY };
+      shader.uniforms.uSpan = { value: ribbon.span };
+      shader.uniforms.uSag = { value: ribbon.sag };
+      shader.uniforms.uHalfW = { value: ribbon.width / 2 + 0.03 };
+
+      shader.vertexShader = shader.vertexShader
+        .replace("#include <common>", "#include <common>\nvarying vec3 vTreePos;")
+        .replace(
+          "#include <begin_vertex>",
+          `#include <begin_vertex>
+          vec4 treePos = vec4(transformed, 1.0);
+          #ifdef USE_INSTANCING
+            treePos = instanceMatrix * treePos;
+          #endif
+          vTreePos = treePos.xyz;`
+        );
+
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          "#include <common>",
+          `#include <common>
+          varying vec3 vTreePos;
+          uniform sampler2D uRibbonR;
+          uniform float uTurns, uHangs, uPhase, uMinY, uSpan, uSag, uHalfW;`
+        )
+        .replace(
+          "#include <clipping_planes_fragment>",
+          `#include <clipping_planes_fragment>
+          {
+            float ang = atan(vTreePos.z, vTreePos.x);
+            float rr = length(vTreePos.xz);
+            for (int k = 0; k < 6; k++) {
+              float s = (ang - uPhase + 6.28318530718 * float(k)) / (6.28318530718 * uTurns);
+              if (s < 0.0 || s > 1.0) continue;
+              float yr = uMinY + s * uSpan - uSag * sin(fract(s * uTurns * uHangs) * 3.14159265);
+              if (abs(vTreePos.y - yr) < uHalfW) {
+                float rib = texture2D(uRibbonR, vec2(s, 0.5)).r;
+                if (rr > rib - 0.035) discard;
+              }
+            }
+          }`
+        );
+    };
+    mat.customProgramCacheKey = () => "frond-ribbon-cut";
+    return mat;
+  }, [texture]);
 
   useLayoutEffect(() => {
     const mesh = ref.current;
@@ -519,15 +550,7 @@ function Branches() {
       castShadow
       receiveShadow
     >
-      <meshStandardMaterial
-        map={texture}
-        bumpMap={texture}
-        bumpScale={2}
-        alphaTest={0.5}
-        side={THREE.DoubleSide}
-        roughness={0.75}
-        metalness={0}
-      />
+      <primitive object={material} attach="material" />
     </instancedMesh>
   );
 }
@@ -851,7 +874,7 @@ function FairyLights({ strand = 1 }) {
 function TreeRibbon() {
   const geometry = useMemo(() => {
     const pts = getTreeData().ribbonPoints;
-    const WIDTH = 0.2;
+    const WIDTH = getTreeData().ribbon.width;
     const positions = [];
     const uvs = [];
     const indices = [];
