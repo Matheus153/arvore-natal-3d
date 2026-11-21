@@ -7,6 +7,8 @@ Uma árvore de Natal interativa em 3D, feita com **Next.js** e **React Three Fib
 - Chão de neve com relevo, textura granulada e cristais cintilando; neve caindo, céu estrelado, saia da árvore e presentes com laço
 - Céu noturno em degradê com lua, bloom nas luzes, presentes com papel estampado e bolas com acabamentos variados
 - Fita vermelha de cetim enrolada em espiral e dois fios de pisca-pisca
+- Enfeites temáticos: Papais Noéis em miniatura, bengalas, pirulitos, balas e bonecos de gengibre
+- Cervos iluminados de arame com luzes na neve
 - Câmera interativa: arraste para girar e role para aproximar
 
 ## Tecnologias

@@ -346,6 +346,45 @@ function getTreeData() {
     }
   }
 
+  // --- enfeites temáticos: papai noel, bengalas, pirulitos, balas e bonecos de gengibre ---
+  const decoRand = seededRandom(4242);
+  const decorations = [];
+  const taken = ornaments.map((o) => new THREE.Vector3(...o.position));
+  const kinds = [
+    ...Array(7).fill("santa"),
+    ...Array(12).fill("candyCane"),
+    ...Array(8).fill("lollipop"),
+    ...Array(12).fill("candy"),
+    ...Array(8).fill("gingerbread"),
+  ];
+  // embaralha para misturar os tipos ao longo da árvore
+  for (let i = kinds.length - 1; i > 0; i--) {
+    const j = Math.floor(decoRand() * (i + 1));
+    [kinds[i], kinds[j]] = [kinds[j], kinds[i]];
+  }
+  kinds.forEach((kind, i) => {
+    let placed = null;
+    for (let attempt = 0; attempt < 30 && !placed; attempt++) {
+      const sN = (i + decoRand()) / kinds.length;
+      const y = minH + 0.2 + Math.pow(sN, 0.9) * (maxH - minH - 0.7);
+      const ang = decoRand() * Math.PI * 2;
+      const r = envR(y, ang) * 0.98 + 0.07;
+      const p = new THREE.Vector3(Math.cos(ang) * r, y, Math.sin(ang) * r);
+      if (taken.every((q) => q.distanceTo(p) > 0.24)) placed = { p, ang };
+    }
+    if (placed) {
+      taken.push(placed.p);
+      decorations.push({
+        kind,
+        position: [placed.p.x, placed.p.y, placed.p.z],
+        // gira o enfeite para ficar de frente para fora da árvore
+        rotY: Math.atan2(Math.cos(placed.ang), Math.sin(placed.ang)),
+        tilt: (decoRand() - 0.5) * 0.4,
+        color: ["#c8102e", "#1f7a3a", "#e0b84a", "#2a6fdb", "#d94fa0"][Math.floor(decoRand() * 5)],
+      });
+    }
+  });
+
   // --- folhagem extra no topo, perto da estrela ---
   // (adicionada por último para não alterar a posição das bolas e do pisca-pisca)
   const topRand = seededRandom(555);
@@ -373,7 +412,7 @@ function getTreeData() {
     }
   }
 
-  treeCache = { fronds: list, lights, ornaments, wirePoints, lights2, wirePoints2, ribbonPoints };
+  treeCache = { fronds: list, lights, ornaments, wirePoints, lights2, wirePoints2, ribbonPoints, decorations };
   return treeCache;
 }
 
@@ -815,6 +854,371 @@ function TreeRibbon() {
         clearcoatRoughness={0.2}
       />
     </mesh>
+  );
+}
+
+/* ---------- Enfeites temáticos pendurados na árvore ---------- */
+
+function canvasTexture(w, h, draw, repeat) {
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  draw(canvas.getContext("2d"), w, h);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  if (repeat) tex.repeat.set(repeat[0], repeat[1]);
+  return tex;
+}
+
+let decoTextures = null;
+function getDecoTextures() {
+  if (decoTextures) return decoTextures;
+  decoTextures = {
+    // listras diagonais vermelhas e brancas da bengala
+    cane: canvasTexture(
+      128,
+      32,
+      (g, w, h) => {
+        g.fillStyle = "#fbfbf7";
+        g.fillRect(0, 0, w, h);
+        g.fillStyle = "#c8102e";
+        for (let x = -h; x < w + h; x += 32) {
+          g.beginPath();
+          g.moveTo(x, 0);
+          g.lineTo(x + 12, 0);
+          g.lineTo(x + 12 + h, h);
+          g.lineTo(x + h, h);
+          g.closePath();
+          g.fill();
+        }
+      },
+      [5, 1]
+    ),
+    // espiral colorida do pirulito
+    swirl: canvasTexture(128, 128, (g, w) => {
+      const c = w / 2;
+      g.fillStyle = "#ffffff";
+      g.fillRect(0, 0, w, w);
+      const colors = ["#e63973", "#ffffff", "#3fb6e8", "#ffffff"];
+      for (let i = 0; i < 4; i++) {
+        g.fillStyle = colors[i];
+        g.beginPath();
+        g.moveTo(c, c);
+        for (let t = 0; t <= 1.001; t += 0.02) {
+          const a = t * Math.PI * 5 + (i * Math.PI) / 2;
+          g.lineTo(c + Math.cos(a) * t * c, c + Math.sin(a) * t * c);
+        }
+        for (let t = 1; t >= 0; t -= 0.02) {
+          const a = t * Math.PI * 5 + (i * Math.PI) / 2 + Math.PI / 2;
+          g.lineTo(c + Math.cos(a) * t * c, c + Math.sin(a) * t * c);
+        }
+        g.closePath();
+        g.fill();
+      }
+    }),
+  };
+  return decoTextures;
+}
+
+function MiniSanta() {
+  return (
+    <group scale={1.15}>
+      {/* corpo */}
+      <mesh scale={[1, 1.1, 0.95]} castShadow>
+        <sphereGeometry args={[0.055, 24, 24]} />
+        <meshPhysicalMaterial color="#c8102e" roughness={0.45} sheen={1} sheenColor="#ff6b6b" />
+      </mesh>
+      {/* barra branca e cinto */}
+      <mesh position={[0, -0.045, 0]} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[0.04, 0.012, 8, 24]} />
+        <meshStandardMaterial color="#f5f5f0" roughness={0.9} />
+      </mesh>
+      <mesh position={[0, -0.005, 0]} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[0.054, 0.007, 8, 24]} />
+        <meshStandardMaterial color="#151515" roughness={0.4} />
+      </mesh>
+      <mesh position={[0, -0.005, 0.058]}>
+        <boxGeometry args={[0.022, 0.016, 0.006]} />
+        <meshStandardMaterial color="#e0b84a" metalness={1} roughness={0.25} />
+      </mesh>
+      {/* cabeça, barba, nariz e olhos */}
+      <mesh position={[0, 0.078, 0]}>
+        <sphereGeometry args={[0.034, 20, 20]} />
+        <meshStandardMaterial color="#f2c6a0" roughness={0.6} />
+      </mesh>
+      <mesh position={[0, 0.062, 0.018]} scale={[1, 1.15, 0.75]}>
+        <sphereGeometry args={[0.03, 16, 16]} />
+        <meshStandardMaterial color="#fafafa" roughness={0.95} />
+      </mesh>
+      <mesh position={[0, 0.08, 0.034]}>
+        <sphereGeometry args={[0.007, 10, 10]} />
+        <meshStandardMaterial color="#e8857a" roughness={0.5} />
+      </mesh>
+      {[-0.012, 0.012].map((x) => (
+        <mesh key={x} position={[x, 0.09, 0.03]}>
+          <sphereGeometry args={[0.004, 8, 8]} />
+          <meshStandardMaterial color="#111" />
+        </mesh>
+      ))}
+      {/* gorro */}
+      <mesh position={[0, 0.1, 0]} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[0.031, 0.009, 8, 24]} />
+        <meshStandardMaterial color="#f5f5f0" roughness={0.9} />
+      </mesh>
+      <mesh position={[0.008, 0.132, 0]} rotation={[0, 0, -0.35]}>
+        <coneGeometry args={[0.032, 0.07, 20]} />
+        <meshPhysicalMaterial color="#c8102e" roughness={0.45} sheen={1} sheenColor="#ff6b6b" />
+      </mesh>
+      <mesh position={[0.024, 0.163, 0]}>
+        <sphereGeometry args={[0.011, 12, 12]} />
+        <meshStandardMaterial color="#f5f5f0" roughness={0.9} />
+      </mesh>
+      {/* braços */}
+      {[-1, 1].map((side) => (
+        <mesh key={side} position={[side * 0.05, 0.01, 0.01]} rotation={[0, 0, side * 0.6]} scale={[0.55, 1, 0.55]}>
+          <capsuleGeometry args={[0.014, 0.035, 4, 10]} />
+          <meshPhysicalMaterial color="#c8102e" roughness={0.45} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+function CandyCane() {
+  const { geometry } = useMemo(() => {
+    const curve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(0, -0.13, 0),
+      new THREE.Vector3(0, 0.03, 0),
+      new THREE.Vector3(0.008, 0.07, 0),
+      new THREE.Vector3(0.035, 0.092, 0),
+      new THREE.Vector3(0.062, 0.072, 0),
+      new THREE.Vector3(0.07, 0.042, 0),
+    ]);
+    return { geometry: new THREE.TubeGeometry(curve, 48, 0.012, 12, false) };
+  }, []);
+  return (
+    <mesh geometry={geometry} castShadow>
+      <meshPhysicalMaterial map={getDecoTextures().cane} roughness={0.2} clearcoat={1} clearcoatRoughness={0.1} />
+    </mesh>
+  );
+}
+
+function Lollipop() {
+  return (
+    <group>
+      <mesh rotation={[Math.PI / 2, 0, 0]} castShadow>
+        <cylinderGeometry args={[0.05, 0.05, 0.018, 32]} />
+        <meshPhysicalMaterial map={getDecoTextures().swirl} roughness={0.15} clearcoat={1} clearcoatRoughness={0.05} />
+      </mesh>
+      <mesh position={[0, -0.09, 0]}>
+        <cylinderGeometry args={[0.005, 0.005, 0.1, 8]} />
+        <meshStandardMaterial color="#f4f1ea" roughness={0.6} />
+      </mesh>
+    </group>
+  );
+}
+
+function WrappedCandy({ color }) {
+  return (
+    <group rotation={[0, 0, 0.3]}>
+      <mesh scale={[1.35, 1, 1]} castShadow>
+        <sphereGeometry args={[0.03, 20, 16]} />
+        <meshPhysicalMaterial color={color} roughness={0.1} metalness={0.2} clearcoat={1} />
+      </mesh>
+      {[-1, 1].map((side) => (
+        <mesh key={side} position={[side * 0.05, 0, 0]} rotation={[0, 0, side * (Math.PI / 2)]}>
+          <coneGeometry args={[0.022, 0.035, 8, 1, true]} />
+          <meshPhysicalMaterial color={color} roughness={0.15} clearcoat={1} side={THREE.DoubleSide} transparent opacity={0.85} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+function Gingerbread() {
+  const dough = <meshStandardMaterial color="#a8642a" roughness={0.85} />;
+  const icing = <meshStandardMaterial color="#ffffff" roughness={0.5} />;
+  return (
+    <group scale={[1, 1, 0.45]}>
+      <mesh position={[0, 0.055, 0]} castShadow>
+        <sphereGeometry args={[0.026, 16, 16]} />
+        {dough}
+      </mesh>
+      <mesh scale={[1, 1.25, 1]} castShadow>
+        <sphereGeometry args={[0.032, 16, 16]} />
+        {dough}
+      </mesh>
+      {[-1, 1].map((side) => (
+        <group key={side}>
+          <mesh position={[side * 0.042, 0.012, 0]} rotation={[0, 0, side * 1.1]}>
+            <capsuleGeometry args={[0.011, 0.03, 4, 8]} />
+            {dough}
+          </mesh>
+          <mesh position={[side * 0.02, -0.05, 0]} rotation={[0, 0, side * 0.35]}>
+            <capsuleGeometry args={[0.012, 0.035, 4, 8]} />
+            {dough}
+          </mesh>
+        </group>
+      ))}
+      {/* glacê: olhos, sorriso e botões */}
+      {[
+        [-0.009, 0.062],
+        [0.009, 0.062],
+        [0, 0.018],
+        [0, 0],
+        [0, -0.018],
+      ].map(([x, y], i) => (
+        <mesh key={i} position={[x, y, 0.033]} scale={[1, 1, 2]}>
+          <sphereGeometry args={[i < 2 ? 0.004 : 0.005, 8, 8]} />
+          {icing}
+        </mesh>
+      ))}
+      <mesh position={[0, 0.047, 0.026]} rotation={[0, 0, Math.PI]}>
+        <torusGeometry args={[0.009, 0.0022, 6, 12, Math.PI]} />
+        {icing}
+      </mesh>
+    </group>
+  );
+}
+
+function Decorations() {
+  const decorations = useMemo(() => getTreeData().decorations, []);
+  return decorations.map((d, i) => (
+    <group key={i} position={d.position} rotation={[0, d.rotY, d.tilt]}>
+      {d.kind === "santa" && <MiniSanta />}
+      {d.kind === "candyCane" && <CandyCane />}
+      {d.kind === "lollipop" && <Lollipop />}
+      {d.kind === "candy" && <WrappedCandy color={d.color} />}
+      {d.kind === "gingerbread" && <Gingerbread />}
+    </group>
+  ));
+}
+
+/* ---------- Cervos iluminados (estrutura de arame com luzes) ---------- */
+
+// Contorno do cervo de perfil: [x, y, z] em metros, x para a frente
+const REINDEER_LINES = [
+  // corpo (dois lados)
+  ...[0.09, -0.09].map((z) =>
+    Array.from({ length: 24 }, (_, i) => {
+      const a = (i / 24) * Math.PI * 2;
+      return [Math.cos(a) * 0.46, 0.78 + Math.sin(a) * 0.2, z];
+    })
+  ),
+  // pernas
+  [[0.3, 0.64, 0.1], [0.33, 0.32, 0.11], [0.3, 0, 0.11]],
+  [[0.22, 0.62, -0.1], [0.25, 0.3, -0.11], [0.24, 0, -0.11]],
+  [[-0.3, 0.64, 0.1], [-0.38, 0.34, 0.11], [-0.33, 0, 0.11]],
+  [[-0.22, 0.62, -0.1], [-0.3, 0.32, -0.11], [-0.26, 0, -0.11]],
+  // pescoço
+  [[0.36, 0.9, 0.05], [0.47, 1.12, 0.03], [0.5, 1.2, 0]],
+  [[0.42, 0.78, -0.05], [0.56, 1.06, -0.03], [0.58, 1.12, 0]],
+  // cabeça
+  [[0.5, 1.2, 0], [0.62, 1.2, 0], [0.75, 1.13, 0], [0.74, 1.08, 0], [0.6, 1.08, 0], [0.56, 1.12, 0]],
+  // orelhas
+  [[0.53, 1.22, 0.04], [0.45, 1.29, 0.07]],
+  [[0.53, 1.22, -0.04], [0.45, 1.29, -0.07]],
+  // galhada
+  [[0.55, 1.23, 0.04], [0.5, 1.42, 0.07], [0.42, 1.55, 0.1]],
+  [[0.51, 1.36, 0.06], [0.6, 1.46, 0.08]],
+  [[0.47, 1.47, 0.08], [0.4, 1.47, 0.09]],
+  [[0.55, 1.23, -0.04], [0.5, 1.42, -0.07], [0.42, 1.55, -0.1]],
+  [[0.51, 1.36, -0.06], [0.6, 1.46, -0.08]],
+  [[0.47, 1.47, -0.08], [0.4, 1.47, -0.09]],
+  // rabo
+  [[-0.45, 0.85, 0], [-0.53, 0.93, 0]],
+];
+
+function LitReindeer({ position, rotation = 0, scale = 1, headDown = false }) {
+  const glowRef = useRef();
+  const wireRef = useRef();
+  const glowTex = useMemo(() => makeBulbGlowTexture(), []);
+
+  const { geometries, bulbPositions, bulbColors } = useMemo(() => {
+    // cabeça abaixada: gira pescoço, cabeça, orelhas e galhada em torno da base do pescoço
+    const pivot = new THREE.Vector3(0.38, 0.86, 0);
+    const bend = new THREE.Matrix4()
+      .makeTranslation(pivot.x, pivot.y, pivot.z)
+      .multiply(new THREE.Matrix4().makeRotationZ(-1.05))
+      .multiply(new THREE.Matrix4().makeTranslation(-pivot.x, -pivot.y, -pivot.z));
+    const geometries = [];
+    const bulbs = [];
+    REINDEER_LINES.forEach((line, li) => {
+      const isHead = li >= 6 && li !== REINDEER_LINES.length - 1;
+      const pts = line.map(([x, y, z]) => {
+        const v = new THREE.Vector3(x, y, z);
+        if (headDown && isHead) v.applyMatrix4(bend);
+        return v;
+      });
+      const curve = pts.length > 2 ? new THREE.CatmullRomCurve3(pts, li < 2) : new THREE.LineCurve3(pts[0], pts[1]);
+      geometries.push(new THREE.TubeGeometry(curve, Math.max(8, pts.length * 8), 0.011, 6, li < 2));
+      // lâmpadas ao longo do arame
+      const len = curve.getLength();
+      const n = Math.max(2, Math.round(len / 0.07));
+      for (let k = 0; k <= n; k++) bulbs.push(curve.getPointAt(Math.min(1, k / n)));
+    });
+    const bulbPositions = new Float32Array(bulbs.length * 3);
+    bulbs.forEach((b, i) => bulbPositions.set([b.x, b.y, b.z], i * 3));
+    const bulbColors = new Float32Array(bulbs.length * 3);
+    return { geometries, bulbPositions, bulbColors };
+  }, [headDown]);
+
+  useFrame((state) => {
+    if (!glowRef.current) return;
+    const t = state.clock.elapsedTime;
+    const arr = glowRef.current.geometry.attributes.color.array;
+    const n = arr.length / 3;
+    for (let i = 0; i < n; i++) {
+      // ondas de luz percorrendo o arame
+      const k = 0.75 + 0.25 * Math.sin(t * 2.2 - i * 0.35);
+      arr[i * 3] = 1.0 * k;
+      arr[i * 3 + 1] = 0.93 * k;
+      arr[i * 3 + 2] = 0.82 * k;
+    }
+    glowRef.current.geometry.attributes.color.needsUpdate = true;
+  });
+
+  return (
+    <group position={position} rotation={[0, rotation, 0]} scale={scale}>
+      <group ref={wireRef}>
+        {geometries.map((g, i) => (
+          <mesh key={i} geometry={g}>
+            <meshBasicMaterial color={[2.4, 2.2, 1.9]} toneMapped={false} />
+          </mesh>
+        ))}
+      </group>
+      <points ref={glowRef}>
+        <bufferGeometry>
+          <bufferAttribute attach="attributes-position" args={[bulbPositions, 3]} />
+          <bufferAttribute attach="attributes-color" args={[bulbColors, 3]} />
+        </bufferGeometry>
+        <pointsMaterial
+          map={glowTex}
+          size={0.16}
+          vertexColors
+          transparent
+          depthWrite={false}
+          blending={THREE.AdditiveBlending}
+          toneMapped={false}
+        />
+      </points>
+      {/* luz que o cervo projeta na neve */}
+      <pointLight position={[0, 0.8, 0]} intensity={2.5} distance={3} color="#fff1d6" />
+    </group>
+  );
+}
+
+function Reindeers() {
+  const a = [3.3, 0, 1.2];
+  const b = [-3.1, 0, 1.9];
+  const c = [-2.4, 0, -2.9];
+  return (
+    <group>
+      <LitReindeer position={[a[0], snowHeight(a[0], a[2]), a[2]]} rotation={2.6} scale={1.05} />
+      <LitReindeer position={[b[0], snowHeight(b[0], b[2]), b[2]]} rotation={0.5} scale={0.85} headDown />
+      <LitReindeer position={[c[0], snowHeight(c[0], c[2]), c[2]]} rotation={-0.4} scale={0.95} />
+    </group>
   );
 }
 
@@ -1371,6 +1775,8 @@ export default function ChristmasScene() {
           <TopStar />
           <Ornaments />
           <TreeRibbon />
+          <Decorations />
+          <Reindeers />
           <FairyLights strand={1} />
           <FairyLights strand={2} />
           <TreeSkirt />
