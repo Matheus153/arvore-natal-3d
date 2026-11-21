@@ -613,7 +613,7 @@ function TopStar() {
   useFrame((state) => {
     const t = state.clock.elapsedTime;
     if (starRef.current) {
-      starRef.current.rotation.y = t * 0.45;
+      starRef.current.rotation.y = t * 0.2;
       starRef.current.material.emissiveIntensity = 0.55 + Math.sin(t * 2) * 0.15;
     }
     if (glowRef.current) {
