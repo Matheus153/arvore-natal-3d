@@ -1868,7 +1868,7 @@ export default function ChristmasScene() {
         <OrbitControls
           enablePan={false}
           autoRotate
-          autoRotateSpeed={0.6}
+          autoRotateSpeed={0.1}
           minDistance={5}
           maxDistance={18}
           minPolarAngle={Math.PI / 6}
