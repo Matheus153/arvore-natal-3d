@@ -283,6 +283,43 @@ function getTreeData() {
     });
   }
 
+  // --- segundo fio de pisca-pisca, intercalado com o primeiro ---
+  const extraRand = seededRandom(777);
+  const lights2 = [];
+  const wirePoints2 = [];
+  {
+    const COUNT = 230;
+    const TURNS2 = 9;
+    const HANGS = 5;
+    const SAMPLES2 = COUNT * 3;
+    for (let i = 0; i <= SAMPLES2; i++) {
+      const s = i / SAMPLES2;
+      const ang = s * Math.PI * 2 * TURNS2 + Math.PI;
+      const frac = ((s * TURNS2 * HANGS) % 1 + 1) % 1;
+      const y = minH + 0.03 + s * (maxH - minH - 0.12) - 0.06 * Math.sin(frac * Math.PI);
+      const r = envR(y, ang) * 0.99 + 0.03;
+      const p = new THREE.Vector3(Math.cos(ang) * r, y, Math.sin(ang) * r);
+      wirePoints2.push(p);
+      if (i % 3 === 0) lights2.push({ position: p, phase: extraRand() * Math.PI * 2 });
+    }
+  }
+
+  // --- fita vermelha enrolada em espiral, com caimento entre os pontos de apoio ---
+  const ribbonPoints = [];
+  {
+    const TURNS_R = 4.5;
+    const HANGS_R = 3;
+    const N = 900;
+    for (let i = 0; i <= N; i++) {
+      const s = i / N;
+      const ang = s * Math.PI * 2 * TURNS_R + Math.PI / 2;
+      const frac = ((s * TURNS_R * HANGS_R) % 1 + 1) % 1;
+      const y = minH + 0.12 + s * (maxH - minH - 0.35) - 0.12 * Math.sin(frac * Math.PI);
+      const r = envR(y, ang) * 1.0 + 0.07;
+      ribbonPoints.push(new THREE.Vector3(Math.cos(ang) * r, y, Math.sin(ang) * r));
+    }
+  }
+
   // --- folhagem extra no topo, perto da estrela ---
   // (adicionada por último para não alterar a posição das bolas e do pisca-pisca)
   const topRand = seededRandom(555);
@@ -310,7 +347,7 @@ function getTreeData() {
     }
   }
 
-  treeCache = { fronds: list, lights, ornaments, wirePoints };
+  treeCache = { fronds: list, lights, ornaments, wirePoints, lights2, wirePoints2, ribbonPoints };
   return treeCache;
 }
 
@@ -587,15 +624,17 @@ function makeBulbGlowTexture() {
   return tex;
 }
 
-function FairyLights() {
+function FairyLights({ strand = 1 }) {
   const bulbsRef = useRef();
   const glowRef = useRef();
-  const lights = useMemo(() => getTreeData().lights, []);
+  const data = getTreeData();
+  const lights = strand === 1 ? data.lights : data.lights2;
+  const wirePoints = strand === 1 ? data.wirePoints : data.wirePoints2;
   const count = lights.length;
   const wireGeo = useMemo(() => {
-    const curve = new THREE.CatmullRomCurve3(getTreeData().wirePoints);
-    return new THREE.TubeGeometry(curve, getTreeData().wirePoints.length * 2, 0.007, 5, false);
-  }, []);
+    const curve = new THREE.CatmullRomCurve3(wirePoints);
+    return new THREE.TubeGeometry(curve, wirePoints.length * 2, 0.007, 5, false);
+  }, [wirePoints]);
   const glowTex = useMemo(() => makeBulbGlowTexture(), []);
   const warm = useMemo(() => new THREE.Color("#ffd8a0"), []);
   const tmp = useMemo(() => new THREE.Color(), []);
@@ -634,7 +673,7 @@ function FairyLights() {
     for (let i = 0; i < count; i++) {
       const ph = lights[i].phase;
       const k = 0.7 + 0.3 * Math.sin(t * 1.6 + ph) * Math.sin(t * 0.55 + ph * 1.7);
-      mesh.setColorAt(i, tmp.copy(warm).multiplyScalar(2 + 1.5 * k));
+      mesh.setColorAt(i, tmp.copy(warm).multiplyScalar(2.6 + 1.8 * k));
       colors[i * 3] = warm.r * k * 1.3;
       colors[i * 3 + 1] = warm.g * k * 1.3;
       colors[i * 3 + 2] = warm.b * k * 1.3;
@@ -674,6 +713,82 @@ function FairyLights() {
         />
       </points>
     </group>
+  );
+}
+
+/* ---------- Fita vermelha enrolada na árvore ---------- */
+
+function TreeRibbon() {
+  const geometry = useMemo(() => {
+    const pts = getTreeData().ribbonPoints;
+    const WIDTH = 0.16;
+    const positions = [];
+    const uvs = [];
+    const indices = [];
+    const up = new THREE.Vector3();
+    const tangent = new THREE.Vector3();
+    const outward = new THREE.Vector3();
+    let dist = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const prev = pts[Math.max(0, i - 1)];
+      const next = pts[Math.min(pts.length - 1, i + 1)];
+      tangent.subVectors(next, prev).normalize();
+      outward.set(pts[i].x, 0, pts[i].z).normalize();
+      // largura da fita perpendicular ao caminho, quase na vertical, com uma leve torção
+      up.crossVectors(outward, tangent).normalize();
+      const twist = Math.sin(i * 0.05) * 0.25;
+      up.applyAxisAngle(tangent, twist);
+      if (i > 0) dist += pts[i].distanceTo(pts[i - 1]);
+      const half = WIDTH / 2;
+      positions.push(pts[i].x + up.x * half, pts[i].y + up.y * half, pts[i].z + up.z * half);
+      positions.push(pts[i].x - up.x * half, pts[i].y - up.y * half, pts[i].z - up.z * half);
+      uvs.push(dist * 3, 1, dist * 3, 0);
+      if (i < pts.length - 1) {
+        const a = i * 2;
+        indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    return geo;
+  }, []);
+
+  // bordas douradas finas e brilho de cetim
+  const texture = useMemo(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 64;
+    canvas.height = 64;
+    const g = canvas.getContext("2d");
+    g.fillStyle = "#b0101c";
+    g.fillRect(0, 0, 64, 64);
+    g.fillStyle = "#d4af37";
+    g.fillRect(0, 0, 64, 4);
+    g.fillRect(0, 60, 64, 4);
+    g.fillStyle = "rgba(255,255,255,0.06)";
+    for (let y = 8; y < 56; y += 4) g.fillRect(0, y, 64, 1);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = THREE.RepeatWrapping;
+    return tex;
+  }, []);
+
+  return (
+    <mesh geometry={geometry} castShadow receiveShadow>
+      <meshPhysicalMaterial
+        map={texture}
+        side={THREE.DoubleSide}
+        roughness={0.32}
+        metalness={0.15}
+        sheen={1}
+        sheenColor="#ff5a6a"
+        sheenRoughness={0.25}
+        clearcoat={0.6}
+        clearcoatRoughness={0.2}
+      />
+    </mesh>
   );
 }
 
@@ -1214,7 +1329,10 @@ export default function ChristmasScene() {
           shadow-bias={-0.0005}
         />
         {/* brilho quente do pisca-pisca sobre a árvore */}
-        <pointLight position={[0, 2.2, 2.2]} intensity={7} distance={6} color="#ffb565" />
+        <pointLight position={[0, 2.2, 2.2]} intensity={10} distance={6.5} color="#ffb565" />
+        <pointLight position={[0, 0.6, 2.4]} intensity={6} distance={5} color="#ffb565" />
+        <pointLight position={[2.2, 2.6, 0.8]} intensity={5} distance={5} color="#ffc27a" />
+        <pointLight position={[-2.2, 2.8, 1]} intensity={5} distance={5} color="#ffc27a" />
         <pointLight position={[1.8, 1.2, -1.2]} intensity={4} distance={5} color="#ffb565" />
         <pointLight position={[-1.8, 1.4, -0.6]} intensity={4} distance={5} color="#ffb565" />
         <pointLight position={[0, 3.5, -2.5]} intensity={3} distance={6} color="#ffb565" />
@@ -1226,7 +1344,9 @@ export default function ChristmasScene() {
           <Branches />
           <TopStar />
           <Ornaments />
-          <FairyLights />
+          <TreeRibbon />
+          <FairyLights strand={1} />
+          <FairyLights strand={2} />
           <TreeSkirt />
           <Presents />
           <Ground />
