@@ -331,21 +331,6 @@ function getTreeData() {
     }
     return best > 0 ? best : envR(h, ang) * 1.25;
   };
-  const ribbonPoints = [];
-  {
-    const TURNS_R = 4.5;
-    const HANGS_R = 3;
-    const N = 900;
-    for (let i = 0; i <= N; i++) {
-      const s = i / N;
-      const ang = s * Math.PI * 2 * TURNS_R + Math.PI / 2;
-      const frac = ((s * TURNS_R * HANGS_R) % 1 + 1) % 1;
-      const y = minH + 0.12 + s * (maxH - minH - 0.35) - 0.12 * Math.sin(frac * Math.PI);
-      const r = tipR(y, ang) * 0.92 + 0.06;
-      ribbonPoints.push(new THREE.Vector3(Math.cos(ang) * r, y, Math.sin(ang) * r));
-    }
-  }
-
   // --- enfeites temáticos: papai noel, bengalas, pirulitos, balas e bonecos de gengibre ---
   const decoRand = seededRandom(4242);
   const decorations = [];
@@ -409,6 +394,86 @@ function getTreeData() {
       const theta = (i / n) * Math.PI * 2 + topRand() * 0.5;
       const dir = new THREE.Vector3(Math.cos(theta) * spread, 1, Math.sin(theta) * spread).normalize();
       addFrond(new THREE.Vector3(0, h, 0), dir, len * (0.85 + topRand() * 0.3), topRand() * 0.8, 0.6);
+    }
+  }
+
+  // --- fita vermelha: calculada depois de TODOS os ramos, passando por fora das agulhas ---
+  // alcance máximo de cada ramo (pontas e bordas laterais), por faixa de altura e direção
+  const reach = new Map();
+  const RB_H = 0.1;
+  const RB_A = 36;
+  const ax = new THREE.Vector3();
+  const ay2 = new THREE.Vector3();
+  const az2 = new THREE.Vector3();
+  const pt = new THREE.Vector3();
+  for (const f of list) {
+    ax.set(1, 0, 0).applyQuaternion(f.quat);
+    ay2.set(0, 1, 0).applyQuaternion(f.quat);
+    az2.set(0, 0, 1).applyQuaternion(f.quat);
+    const L = f.scale.y;
+    const W = f.scale.x;
+    const D = f.scale.z;
+    for (const t of [0.3, 0.5, 0.7, 0.85, 1]) {
+      for (const xs of [-0.5, -0.25, 0, 0.25, 0.5]) {
+        pt.copy(f.pos)
+          .addScaledVector(ax, xs * W)
+          .addScaledVector(ay2, t * L)
+          .addScaledVector(az2, (-0.28 * t * t - Math.abs(xs) * 0.35) * D);
+        const hb = Math.floor(pt.y / RB_H);
+        const ab = Math.floor(((Math.atan2(pt.z, pt.x) + Math.PI) / (Math.PI * 2)) * RB_A) % RB_A;
+        const key = hb + "_" + ab;
+        const r = Math.hypot(pt.x, pt.z);
+        if (r > (reach.get(key) || 0)) reach.set(key, r);
+      }
+    }
+  }
+  const reachAt = (h, ang) => {
+    const hb = Math.floor(h / RB_H);
+    const ab = Math.floor(((Math.atan2(Math.sin(ang), Math.cos(ang)) + Math.PI) / (Math.PI * 2)) * RB_A) % RB_A;
+    let best = 0;
+    // considera a largura da fita (±0.12 na altura) e os vizinhos na direção
+    for (let dh = -2; dh <= 2; dh++) {
+      for (let da = -1; da <= 1; da++) {
+        const v = reach.get(hb + dh + "_" + ((ab + da + RB_A) % RB_A));
+        if (v !== undefined && v > best) best = v;
+      }
+    }
+    return best;
+  };
+
+  const ribbonPoints = [];
+  {
+    const TURNS_R = 4.5;
+    const HANGS_R = 3;
+    const N = 900;
+    const ys = [];
+    const angs = [];
+    const radii = [];
+    for (let i = 0; i <= N; i++) {
+      const s = i / N;
+      const ang = s * Math.PI * 2 * TURNS_R + Math.PI / 2;
+      const frac = ((s * TURNS_R * HANGS_R) % 1 + 1) % 1;
+      const y = minH + 0.12 + s * (maxH - minH - 0.35) - 0.12 * Math.sin(frac * Math.PI);
+      ys.push(y);
+      angs.push(ang);
+      radii.push(Math.max(reachAt(y, ang), tipR(y, ang)) + 0.05);
+    }
+    // suaviza o raio (máximo e depois média móvel) para a fita não ondular nem entrar nas agulhas
+    const W = 12;
+    const maxed = radii.map((_, i) => {
+      let m = 0;
+      for (let k = Math.max(0, i - W); k <= Math.min(N, i + W); k++) m = Math.max(m, radii[k]);
+      return m;
+    });
+    for (let i = 0; i <= N; i++) {
+      let sum = 0;
+      let n = 0;
+      for (let k = Math.max(0, i - W); k <= Math.min(N, i + W); k++) {
+        sum += maxed[k];
+        n++;
+      }
+      const r = Math.max(sum / n, radii[i]);
+      ribbonPoints.push(new THREE.Vector3(Math.cos(angs[i]) * r, ys[i], Math.sin(angs[i]) * r));
     }
   }
 
