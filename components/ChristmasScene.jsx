@@ -112,6 +112,162 @@ function makeFrondGeometry() {
 
 const FROND_TINTS = ["#ffffff", "#e4eedc", "#cfdcc6", "#f0f5e2", "#bfcfb6"];
 
+// Gera (uma única vez) os ramos e os pontos de fixação de lâmpadas e bolas
+let treeCache = null;
+function getTreeData() {
+  if (treeCache) return treeCache;
+  const anchors = [];
+  const rand = seededRandom(1234);
+  const worldUp = new THREE.Vector3(0, 1, 0);
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  const list = [];
+
+  const addFrond = (base, dir, length, roll, width = 0.62, main = false) => {
+    const y = dir.clone().normalize();
+    let z = worldUp.clone().addScaledVector(y, -worldUp.dot(y));
+    if (z.lengthSq() < 1e-4) z = new THREE.Vector3(0, 0, 1);
+    z.normalize();
+    const x = new THREE.Vector3().crossVectors(y, z).normalize();
+    const basis = new THREE.Matrix4().makeBasis(x, y, z);
+    const q = new THREE.Quaternion().setFromRotationMatrix(basis);
+    q.premultiply(new THREE.Quaternion().setFromAxisAngle(y, roll));
+    list.push({
+      pos: base.clone(),
+      quat: q,
+      scale: new THREE.Vector3(length * width, length, length * 0.7),
+      tint: FROND_TINTS[Math.floor(rand() * FROND_TINTS.length)],
+    });
+
+    // pontos sobre a superfície dos ramos principais, onde vão lâmpadas e bolas
+    if (main) {
+      const ay = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
+      const az = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
+      for (const t of [0.5, 0.65, 0.8]) {
+        const p = base
+          .clone()
+          .addScaledVector(ay, t * length)
+          .addScaledVector(az, -0.28 * t * t * length * 0.7);
+        const out = new THREE.Vector3(p.x, 0, p.z).normalize();
+        const top = p.clone().addScaledVector(az, 0.035).addScaledVector(out, 0.02);
+        const under = p.clone().addScaledVector(az, -0.06);
+        anchors.push({
+          top,
+          under,
+          h: top.y,
+          ang: Math.atan2(top.z, top.x),
+          r: Math.hypot(top.x, top.z),
+          t,
+        });
+      }
+    }
+  };
+
+  let whorl = 0;
+  for (let y = TREE_BOTTOM; y < TREE_TOP - 0.2; y += 0.13, whorl++) {
+    const R = radiusAt(y);
+    const s = (y - TREE_BOTTOM) / (TREE_TOP - TREE_BOTTOM);
+    const count = Math.max(5, Math.round(R * 6.5));
+    const droop = 0.1 + (1 - s) * 0.3;
+
+    for (let i = 0; i < count; i++) {
+      const theta = (i / count) * Math.PI * 2 + whorl * golden + (rand() - 0.5) * 0.35;
+      const d = droop + (rand() - 0.5) * 0.14;
+      const dir = new THREE.Vector3(
+        Math.cos(theta) * Math.cos(d),
+        -Math.sin(d),
+        Math.sin(theta) * Math.cos(d)
+      ).normalize();
+      const L = R * (0.95 + rand() * 0.18) + 0.2;
+      const base = new THREE.Vector3(0, y + (rand() - 0.5) * 0.05, 0);
+
+      // ramo principal
+      addFrond(base, dir, L, (rand() - 0.5) * 0.4, 0.62, true);
+
+      // ramos laterais saindo do principal, para dar volume
+      const side = new THREE.Vector3(-Math.sin(theta), 0, Math.cos(theta));
+      const subs = L > 1 ? 4 : 2;
+      for (let k = 0; k < subs; k++) {
+        const f = 0.25 + (k / subs) * 0.5 + rand() * 0.08;
+        const p = base.clone().addScaledVector(dir, L * f * 0.85);
+        const sign = k % 2 === 0 ? 1 : -1;
+        const dir2 = dir
+          .clone()
+          .multiplyScalar(0.75)
+          .addScaledVector(side, sign * (0.5 + rand() * 0.25))
+          .add(new THREE.Vector3(0, -0.05 - rand() * 0.15, 0))
+          .normalize();
+        addFrond(p, dir2, L * (0.45 - f * 0.15), sign * 0.35, 0.58);
+      }
+    }
+
+    // ramos internos mais curtos e levemente para cima, preenchendo a copa
+    for (let i = 0; i < count; i++) {
+      const theta = ((i + 0.5) / count) * Math.PI * 2 + whorl * golden;
+      const dir = new THREE.Vector3(Math.cos(theta), 0.12 + rand() * 0.15, Math.sin(theta)).normalize();
+      addFrond(new THREE.Vector3(0, y + 0.06, 0), dir, R * 0.65 + 0.15, (rand() - 0.5) * 0.6);
+    }
+  }
+
+  // ponta da árvore: alguns ramos apontando para cima
+  for (let i = 0; i < 5; i++) {
+    const theta = (i / 5) * Math.PI * 2;
+    const dir = new THREE.Vector3(Math.cos(theta) * 0.35, 1, Math.sin(theta) * 0.35).normalize();
+    addFrond(new THREE.Vector3(0, TREE_TOP - 0.55, 0), dir, 0.55, 0, 0.5);
+  }
+
+
+  // --- pisca-pisca: espiral em volta da árvore, cada lâmpada presa ao ramo mais próximo ---
+  const used = new Set();
+  const lights = [];
+  const heights = anchors.map((a) => a.h).sort((a, b) => a - b);
+  const minH = heights[Math.floor(heights.length * 0.03)];
+  const maxH = heights[Math.floor(heights.length * 0.97)];
+  const LIGHT_COUNT = 240;
+  const TURNS = 8;
+  for (let i = 0; i < LIGHT_COUNT; i++) {
+    const s = i / (LIGHT_COUNT - 1);
+    const ty = minH + s * (maxH - minH);
+    const ta = s * Math.PI * 2 * TURNS;
+    let best = -1;
+    let bestCost = Infinity;
+    for (let j = 0; j < anchors.length; j++) {
+      if (used.has(j)) continue;
+      const a = anchors[j];
+      let da = Math.abs(a.ang - Math.atan2(Math.sin(ta), Math.cos(ta)));
+      if (da > Math.PI) da = Math.PI * 2 - da;
+      const cost = ((a.h - ty) * 3) ** 2 + (da * Math.max(a.r, 0.3)) ** 2 + (a.t < 0.6 ? 0.02 : 0);
+      if (cost < bestCost) {
+        bestCost = cost;
+        best = j;
+      }
+    }
+    if (best >= 0) {
+      used.add(best);
+      lights.push({ position: anchors[best].top, phase: rand() * Math.PI * 2 });
+    }
+  }
+
+  // --- bolas: penduradas embaixo de ramos que não receberam lâmpada ---
+  const ornaments = [];
+  const free = anchors
+    .map((a, j) => ({ a, j }))
+    .filter(({ a, j }) => !used.has(j) && a.t === 0.65 && a.h > minH + 0.1 && a.h < maxH - 0.35);
+  const ORNAMENT_COUNT = Math.min(50, free.length);
+  const step = free.length / ORNAMENT_COUNT;
+  for (let i = 0; i < ORNAMENT_COUNT; i++) {
+    const { a } = free[Math.floor(i * step + rand() * step * 0.8)];
+    const size = 0.07 + rand() * 0.045;
+    ornaments.push({
+      position: [a.under.x, a.under.y - size - 0.04, a.under.z],
+      color: ORNAMENT_COLORS[Math.floor(rand() * ORNAMENT_COLORS.length)],
+      size,
+    });
+  }
+
+  treeCache = { fronds: list, lights, ornaments };
+  return treeCache;
+}
+
 function Branches() {
   const ref = useRef();
   const texture = useMemo(() => makeFrondTexture(), []);
@@ -126,84 +282,7 @@ function Branches() {
     [texture]
   );
 
-  const instances = useMemo(() => {
-    const rand = seededRandom(1234);
-    const worldUp = new THREE.Vector3(0, 1, 0);
-    const golden = Math.PI * (3 - Math.sqrt(5));
-    const list = [];
-
-    const addFrond = (base, dir, length, roll, width = 0.62) => {
-      const y = dir.clone().normalize();
-      let z = worldUp.clone().addScaledVector(y, -worldUp.dot(y));
-      if (z.lengthSq() < 1e-4) z = new THREE.Vector3(0, 0, 1);
-      z.normalize();
-      const x = new THREE.Vector3().crossVectors(y, z).normalize();
-      const basis = new THREE.Matrix4().makeBasis(x, y, z);
-      const q = new THREE.Quaternion().setFromRotationMatrix(basis);
-      q.premultiply(new THREE.Quaternion().setFromAxisAngle(y, roll));
-      list.push({
-        pos: base.clone(),
-        quat: q,
-        scale: new THREE.Vector3(length * width, length, length * 0.7),
-        tint: FROND_TINTS[Math.floor(rand() * FROND_TINTS.length)],
-      });
-    };
-
-    let whorl = 0;
-    for (let y = TREE_BOTTOM; y < TREE_TOP - 0.2; y += 0.13, whorl++) {
-      const R = radiusAt(y);
-      const s = (y - TREE_BOTTOM) / (TREE_TOP - TREE_BOTTOM);
-      const count = Math.max(5, Math.round(R * 6.5));
-      const droop = 0.1 + (1 - s) * 0.3;
-
-      for (let i = 0; i < count; i++) {
-        const theta = (i / count) * Math.PI * 2 + whorl * golden + (rand() - 0.5) * 0.35;
-        const d = droop + (rand() - 0.5) * 0.14;
-        const dir = new THREE.Vector3(
-          Math.cos(theta) * Math.cos(d),
-          -Math.sin(d),
-          Math.sin(theta) * Math.cos(d)
-        ).normalize();
-        const L = R * (0.95 + rand() * 0.18) + 0.2;
-        const base = new THREE.Vector3(0, y + (rand() - 0.5) * 0.05, 0);
-
-        // ramo principal
-        addFrond(base, dir, L, (rand() - 0.5) * 0.4);
-
-        // ramos laterais saindo do principal, para dar volume
-        const side = new THREE.Vector3(-Math.sin(theta), 0, Math.cos(theta));
-        const subs = L > 1 ? 4 : 2;
-        for (let k = 0; k < subs; k++) {
-          const f = 0.25 + (k / subs) * 0.5 + rand() * 0.08;
-          const p = base.clone().addScaledVector(dir, L * f * 0.85);
-          const sign = k % 2 === 0 ? 1 : -1;
-          const dir2 = dir
-            .clone()
-            .multiplyScalar(0.75)
-            .addScaledVector(side, sign * (0.5 + rand() * 0.25))
-            .add(new THREE.Vector3(0, -0.05 - rand() * 0.15, 0))
-            .normalize();
-          addFrond(p, dir2, L * (0.45 - f * 0.15), sign * 0.35, 0.58);
-        }
-      }
-
-      // ramos internos mais curtos e levemente para cima, preenchendo a copa
-      for (let i = 0; i < count; i++) {
-        const theta = ((i + 0.5) / count) * Math.PI * 2 + whorl * golden;
-        const dir = new THREE.Vector3(Math.cos(theta), 0.12 + rand() * 0.15, Math.sin(theta)).normalize();
-        addFrond(new THREE.Vector3(0, y + 0.06, 0), dir, R * 0.65 + 0.15, (rand() - 0.5) * 0.6);
-      }
-    }
-
-    // ponta da árvore: alguns ramos apontando para cima
-    for (let i = 0; i < 5; i++) {
-      const theta = (i / 5) * Math.PI * 2;
-      const dir = new THREE.Vector3(Math.cos(theta) * 0.35, 1, Math.sin(theta) * 0.35).normalize();
-      addFrond(new THREE.Vector3(0, TREE_TOP - 0.55, 0), dir, 0.55, 0, 0.5);
-    }
-
-    return list;
-  }, []);
+  const instances = useMemo(() => getTreeData().fronds, []);
 
   useLayoutEffect(() => {
     const mesh = ref.current;
@@ -382,82 +461,108 @@ function Ornament({ position, color, size }) {
 }
 
 function Ornaments() {
-  const ornaments = useMemo(() => {
-    const rand = seededRandom(42);
-    const list = [];
-    const total = 46;
-    for (let i = 0; i < total; i++) {
-      const y = TREE_BOTTOM + 0.2 + rand() * (TREE_TOP - TREE_BOTTOM - 0.9);
-      const angle = i * 2.399 + rand() * 0.4; // ângulo de ouro: espalha bem
-      const r = radiusAt(y) * 0.92;
-      const size = 0.08 + rand() * 0.05;
-      list.push({
-        position: [Math.cos(angle) * r, y - 0.08, Math.sin(angle) * r],
-        color: ORNAMENT_COLORS[Math.floor(rand() * ORNAMENT_COLORS.length)],
-        size,
-      });
-    }
-    return list;
-  }, []);
-
+  const ornaments = useMemo(() => getTreeData().ornaments, []);
   return ornaments.map((o, i) => <Ornament key={i} {...o} />);
 }
 
-/* ---------- Pisca-pisca de luz quente ---------- */
+/* ---------- Pisca-pisca de luz quente, preso aos ramos ---------- */
+
+function makeBulbGlowTexture() {
+  const size = 128;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const g = canvas.getContext("2d");
+  const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grad.addColorStop(0, "rgba(255, 255, 255, 1)");
+  grad.addColorStop(0.12, "rgba(255, 240, 200, 0.85)");
+  grad.addColorStop(0.35, "rgba(255, 200, 120, 0.25)");
+  grad.addColorStop(1, "rgba(255, 170, 80, 0)");
+  g.fillStyle = grad;
+  g.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
 
 function FairyLights() {
-  const ref = useRef();
-  const count = 220;
-
-  const { positions, phases } = useMemo(() => {
-    const rand = seededRandom(99);
-    const positions = [];
-    const phases = new Float32Array(count);
-    const turns = 7.5;
-    for (let i = 0; i < count; i++) {
-      const s = i / count;
-      const y = TREE_BOTTOM + 0.05 + s * (TREE_TOP - TREE_BOTTOM - 0.35);
-      const angle = s * Math.PI * 2 * turns;
-      // leve "barriga" do fio entre os galhos
-      const sag = Math.sin(s * Math.PI * 2 * turns * 3) * 0.04;
-      const r = radiusAt(y) * 0.93 + 0.02;
-      positions.push(new THREE.Vector3(Math.cos(angle) * r, y + sag, Math.sin(angle) * r));
-      phases[i] = rand() * Math.PI * 2;
-    }
-    return { positions, phases };
-  }, []);
-
-  const warm = useMemo(() => new THREE.Color("#ffd28a"), []);
+  const bulbsRef = useRef();
+  const glowRef = useRef();
+  const lights = useMemo(() => getTreeData().lights, []);
+  const count = lights.length;
+  const glowTex = useMemo(() => makeBulbGlowTexture(), []);
+  const warm = useMemo(() => new THREE.Color("#ffd8a0"), []);
   const tmp = useMemo(() => new THREE.Color(), []);
 
-  useLayoutEffect(() => {
-    const m = new THREE.Matrix4();
-    positions.forEach((p, i) => {
-      m.makeTranslation(p.x, p.y, p.z);
-      ref.current.setMatrixAt(i, m);
-      ref.current.setColorAt(i, warm);
+  const { glowPositions, glowColors } = useMemo(() => {
+    const glowPositions = new Float32Array(count * 3);
+    const glowColors = new Float32Array(count * 3);
+    lights.forEach((l, i) => {
+      glowPositions[i * 3] = l.position.x;
+      glowPositions[i * 3 + 1] = l.position.y;
+      glowPositions[i * 3 + 2] = l.position.z;
     });
-    ref.current.instanceMatrix.needsUpdate = true;
-    if (ref.current.instanceColor) ref.current.instanceColor.needsUpdate = true;
-    ref.current.material.needsUpdate = true;
-  }, [positions, warm]);
+    return { glowPositions, glowColors };
+  }, [lights, count]);
 
-  // cintilar suave, como lâmpadas de verdade
+  useLayoutEffect(() => {
+    const mesh = bulbsRef.current;
+    const m = new THREE.Matrix4();
+    lights.forEach((l, i) => {
+      m.makeTranslation(l.position.x, l.position.y, l.position.z);
+      mesh.setMatrixAt(i, m);
+      mesh.setColorAt(i, warm);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    mesh.material.needsUpdate = true;
+  }, [lights, warm]);
+
+  // cintilar suave: cada lâmpada oscila no seu próprio ritmo
   useFrame((state) => {
-    if (!ref.current) return;
+    const mesh = bulbsRef.current;
+    const glow = glowRef.current;
+    if (!mesh || !glow) return;
     const t = state.clock.elapsedTime;
+    const colors = glow.geometry.attributes.color.array;
     for (let i = 0; i < count; i++) {
-      const k = 0.65 + 0.35 * Math.sin(t * 1.8 + phases[i]) * Math.sin(t * 0.7 + phases[i] * 2);
-      ref.current.setColorAt(i, tmp.copy(warm).multiplyScalar(2.2 * k));
+      const ph = lights[i].phase;
+      const k = 0.7 + 0.3 * Math.sin(t * 1.6 + ph) * Math.sin(t * 0.55 + ph * 1.7);
+      mesh.setColorAt(i, tmp.copy(warm).multiplyScalar(1.6 + 1.2 * k));
+      colors[i * 3] = warm.r * k;
+      colors[i * 3 + 1] = warm.g * k;
+      colors[i * 3 + 2] = warm.b * k;
     }
-    if (ref.current.instanceColor) ref.current.instanceColor.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    glow.geometry.attributes.color.needsUpdate = true;
   });
 
   return (
-    <instancedMesh ref={ref} args={[undefined, undefined, count]}>
-      <sphereGeometry args={[0.028, 8, 8]} />
-      <meshBasicMaterial toneMapped={false} />
-    </instancedMesh>
+    <group>
+      {/* lâmpada */}
+      <instancedMesh ref={bulbsRef} args={[undefined, undefined, count]}>
+        <sphereGeometry args={[0.022, 10, 10]} />
+        <meshBasicMaterial toneMapped={false} />
+      </instancedMesh>
+
+      {/* halo de luz em volta de cada lâmpada */}
+      <points ref={glowRef} renderOrder={2}>
+        <bufferGeometry>
+          <bufferAttribute attach="attributes-position" args={[glowPositions, 3]} />
+          <bufferAttribute attach="attributes-color" args={[glowColors, 3]} />
+        </bufferGeometry>
+        <pointsMaterial
+          map={glowTex}
+          size={0.28}
+          sizeAttenuation
+          vertexColors
+          transparent
+          depthWrite={false}
+          blending={THREE.AdditiveBlending}
+          toneMapped={false}
+        />
+      </points>
+    </group>
   );
 }
 
@@ -591,7 +696,9 @@ export default function ChristmasScene() {
           shadow-bias={-0.0005}
         />
         {/* brilho quente do pisca-pisca sobre a árvore */}
-        <pointLight position={[0, 2.5, 2.5]} intensity={5} distance={7} color="#ffb565" />
+        <pointLight position={[0, 2.2, 2.2]} intensity={7} distance={6} color="#ffb565" />
+        <pointLight position={[1.8, 1.2, -1.2]} intensity={4} distance={5} color="#ffb565" />
+        <pointLight position={[-1.8, 1.4, -0.6]} intensity={4} distance={5} color="#ffb565" />
         <pointLight position={[0, 3.5, -2.5]} intensity={3} distance={6} color="#ffb565" />
 
         <Stars radius={60} depth={40} count={3000} factor={4} fade speed={0.5} />
