@@ -3,6 +3,8 @@
 import { useLayoutEffect, useMemo, useRef } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls, Stars, Environment, Lightformer } from "@react-three/drei";
+import { EffectComposer, Bloom, Vignette, ToneMapping, Noise } from "@react-three/postprocessing";
+import { ToneMappingMode, BlendFunction } from "postprocessing";
 import * as THREE from "three";
 
 // Gerador pseudoaleatório com semente, para a árvore ficar igual a cada carregamento
@@ -352,9 +354,11 @@ function Branches() {
     >
       <meshStandardMaterial
         map={texture}
+        bumpMap={texture}
+        bumpScale={2}
         alphaTest={0.5}
         side={THREE.DoubleSide}
-        roughness={0.8}
+        roughness={0.75}
         metalness={0}
       />
     </instancedMesh>
@@ -482,23 +486,77 @@ function TopStar() {
 
 /* ---------- Bolas de vidro/metal ---------- */
 
-function Ornament({ position, color, size }) {
+// Textura de purpurina (pontinhos que refletem a luz) para algumas bolas
+let glitterTexture = null;
+function getGlitterTexture() {
+  if (glitterTexture) return glitterTexture;
+  const size = 256;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const g = canvas.getContext("2d");
+  g.fillStyle = "#808080";
+  g.fillRect(0, 0, size, size);
+  const rand = seededRandom(321);
+  for (let i = 0; i < 6000; i++) {
+    const v = Math.floor(rand() * 255);
+    g.fillStyle = `rgb(${v},${v},${v})`;
+    g.fillRect(rand() * size, rand() * size, 2, 2);
+  }
+  glitterTexture = new THREE.CanvasTexture(canvas);
+  glitterTexture.wrapS = glitterTexture.wrapT = THREE.RepeatWrapping;
+  glitterTexture.repeat.set(2, 1);
+  return glitterTexture;
+}
+
+// Acabamentos: espelhado, fosco (acetinado) e com purpurina
+const ORNAMENT_FINISHES = ["glossy", "glossy", "satin", "glitter"];
+
+function Ornament({ position, color, size, index = 0 }) {
+  const finish = ORNAMENT_FINISHES[index % ORNAMENT_FINISHES.length];
+  const glitter = finish === "glitter" ? getGlitterTexture() : null;
   return (
     <group position={position}>
-      {/* gancho */}
-      <mesh position={[0, size + 0.02, 0]}>
-        <cylinderGeometry args={[size * 0.25, size * 0.25, size * 0.3, 10]} />
-        <meshStandardMaterial color="#c8b27a" metalness={1} roughness={0.3} />
+      {/* tampinha metálica com argola */}
+      <mesh position={[0, size * 0.98, 0]}>
+        <cylinderGeometry args={[size * 0.24, size * 0.28, size * 0.28, 16]} />
+        <meshStandardMaterial color="#cdb87f" metalness={1} roughness={0.25} />
+      </mesh>
+      <mesh position={[0, size * 1.2, 0]}>
+        <torusGeometry args={[size * 0.1, size * 0.025, 6, 12]} />
+        <meshStandardMaterial color="#cdb87f" metalness={1} roughness={0.25} />
       </mesh>
       <mesh castShadow>
-        <sphereGeometry args={[size, 32, 32]} />
-        <meshPhysicalMaterial
-          color={color}
-          metalness={0.85}
-          roughness={0.12}
-          clearcoat={1}
-          clearcoatRoughness={0.05}
-        />
+        <sphereGeometry args={[size, 40, 40]} />
+        {finish === "glossy" && (
+          <meshPhysicalMaterial
+            color={color}
+            metalness={0.9}
+            roughness={0.08}
+            clearcoat={1}
+            clearcoatRoughness={0.03}
+          />
+        )}
+        {finish === "satin" && (
+          <meshPhysicalMaterial
+            color={color}
+            metalness={0.35}
+            roughness={0.45}
+            sheen={1}
+            sheenRoughness={0.4}
+            sheenColor={color}
+          />
+        )}
+        {finish === "glitter" && (
+          <meshPhysicalMaterial
+            color={color}
+            metalness={0.85}
+            roughness={0.32}
+            bumpMap={glitter}
+            bumpScale={4}
+            clearcoat={0.4}
+          />
+        )}
       </mesh>
     </group>
   );
@@ -506,7 +564,7 @@ function Ornament({ position, color, size }) {
 
 function Ornaments() {
   const ornaments = useMemo(() => getTreeData().ornaments, []);
-  return ornaments.map((o, i) => <Ornament key={i} {...o} />);
+  return ornaments.map((o, i) => <Ornament key={i} index={i} {...o} />);
 }
 
 /* ---------- Pisca-pisca de luz quente, preso aos ramos ---------- */
@@ -606,7 +664,7 @@ function FairyLights() {
         </bufferGeometry>
         <pointsMaterial
           map={glowTex}
-          size={0.4}
+          size={0.32}
           sizeAttenuation
           vertexColors
           transparent
@@ -621,27 +679,125 @@ function FairyLights() {
 
 /* ---------- Presentes, saia da árvore, chão e neve ---------- */
 
-function Present({ position, size, color, ribbon, rotation = 0 }) {
+// Papel de presente estampado desenhado em canvas
+function makeWrapTexture(base, accent, pattern) {
+  const size = 256;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const g = canvas.getContext("2d");
+  g.fillStyle = base;
+  g.fillRect(0, 0, size, size);
+  g.fillStyle = accent;
+  g.strokeStyle = accent;
+  if (pattern === "stripes") {
+    g.lineWidth = 14;
+    for (let i = -size; i < size * 2; i += 44) {
+      g.beginPath();
+      g.moveTo(i, 0);
+      g.lineTo(i + size, size);
+      g.stroke();
+    }
+  } else if (pattern === "dots") {
+    for (let y = 16; y < size; y += 40) {
+      for (let x = (y / 40) % 2 ? 36 : 16; x < size; x += 40) {
+        g.beginPath();
+        g.arc(x, y, 6, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
+  } else if (pattern === "stars") {
+    const star = (cx, cy, r) => {
+      g.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const rr = i % 2 === 0 ? r : r * 0.45;
+        const a = (i / 10) * Math.PI * 2 - Math.PI / 2;
+        g.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
+      }
+      g.closePath();
+      g.fill();
+    };
+    for (let y = 24; y < size; y += 52) {
+      for (let x = (y / 52) % 2 ? 50 : 24; x < size; x += 52) star(x, y, 11);
+    }
+  } else if (pattern === "plaid") {
+    g.globalAlpha = 0.35;
+    for (let i = 0; i < size; i += 48) {
+      g.fillRect(i, 0, 18, size);
+      g.fillRect(0, i, size, 18);
+    }
+    g.globalAlpha = 0.6;
+    for (let i = 8; i < size; i += 48) {
+      g.fillRect(i, 0, 3, size);
+      g.fillRect(0, i, size, 3);
+    }
+    g.globalAlpha = 1;
+  }
+  // leve textura de papel
+  const rand = seededRandom(base.length * 31 + pattern.length);
+  for (let i = 0; i < 1500; i++) {
+    g.fillStyle = `rgba(255,255,255,${rand() * 0.05})`;
+    g.fillRect(rand() * size, rand() * size, 2, 2);
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  return tex;
+}
+
+function Present({ position, size, color, accent, pattern, ribbon, rotation = 0 }) {
   const [w, h, d] = size;
+  const paper = useMemo(() => makeWrapTexture(color, accent, pattern), [color, accent, pattern]);
+  const loopR = w * 0.13;
+  const ribbonMat = (
+    <meshPhysicalMaterial
+      color={ribbon}
+      metalness={0.3}
+      roughness={0.3}
+      sheen={1}
+      sheenColor={ribbon}
+      sheenRoughness={0.3}
+      clearcoat={0.5}
+    />
+  );
   return (
     <group position={[position[0], h / 2, position[2]]} rotation={[0, rotation, 0]}>
       <mesh castShadow receiveShadow>
         <boxGeometry args={[w, h, d]} />
-        <meshStandardMaterial color={color} roughness={0.6} />
+        <meshStandardMaterial map={paper} roughness={0.55} />
       </mesh>
-      <mesh>
-        <boxGeometry args={[w * 0.14, h + 0.01, d + 0.01]} />
-        <meshStandardMaterial color={ribbon} metalness={0.6} roughness={0.35} />
+      {/* fitas cruzadas */}
+      <mesh castShadow>
+        <boxGeometry args={[w * 0.12, h + 0.008, d + 0.008]} />
+        {ribbonMat}
       </mesh>
-      <mesh>
-        <boxGeometry args={[w + 0.01, h + 0.01, d * 0.14]} />
-        <meshStandardMaterial color={ribbon} metalness={0.6} roughness={0.35} />
+      <mesh castShadow>
+        <boxGeometry args={[w + 0.008, h + 0.008, d * 0.12]} />
+        {ribbonMat}
       </mesh>
-      {/* laço */}
-      <mesh position={[0, h / 2 + 0.04, 0]} rotation={[Math.PI / 2, 0, 0]}>
-        <torusGeometry args={[w * 0.12, w * 0.04, 8, 16]} />
-        <meshStandardMaterial color={ribbon} metalness={0.6} roughness={0.35} />
-      </mesh>
+      {/* laço: duas alças, nó e pontas */}
+      <group position={[0, h / 2, 0]}>
+        <mesh position={[-loopR * 0.85, loopR * 0.7, 0]} rotation={[0, 0, 0.5]} scale={[1, 1, 0.45]} castShadow>
+          <torusGeometry args={[loopR, w * 0.028, 10, 28]} />
+          {ribbonMat}
+        </mesh>
+        <mesh position={[loopR * 0.85, loopR * 0.7, 0]} rotation={[0, 0, -0.5]} scale={[1, 1, 0.45]} castShadow>
+          <torusGeometry args={[loopR, w * 0.028, 10, 28]} />
+          {ribbonMat}
+        </mesh>
+        <mesh position={[0, loopR * 0.25, 0]} castShadow>
+          <sphereGeometry args={[w * 0.045, 16, 16]} />
+          {ribbonMat}
+        </mesh>
+        <mesh position={[-w * 0.08, 0.004, w * 0.09]} rotation={[0, 0.6, 0]}>
+          <boxGeometry args={[w * 0.06, 0.006, w * 0.22]} />
+          {ribbonMat}
+        </mesh>
+        <mesh position={[w * 0.08, 0.004, w * 0.09]} rotation={[0, -0.6, 0]}>
+          <boxGeometry args={[w * 0.06, 0.006, w * 0.22]} />
+          {ribbonMat}
+        </mesh>
+      </group>
     </group>
   );
 }
@@ -649,11 +805,11 @@ function Present({ position, size, color, ribbon, rotation = 0 }) {
 function Presents() {
   return (
     <group>
-      <Present position={[1.5, 0, 1.3]} size={[0.6, 0.45, 0.6]} color="#8b1e2b" ribbon="#d4af37" rotation={0.4} />
-      <Present position={[-1.4, 0, 1.5]} size={[0.5, 0.38, 0.5]} color="#1f3b5c" ribbon="#e5e5e5" rotation={-0.3} />
-      <Present position={[0.25, 0, 2.05]} size={[0.42, 0.32, 0.42]} color="#e8e1d3" ribbon="#a4161a" rotation={0.9} />
-      <Present position={[-1.9, 0, -0.5]} size={[0.55, 0.55, 0.55]} color="#2f5d3a" ribbon="#d4af37" rotation={0.2} />
-      <Present position={[1.95, 0, -0.4]} size={[0.4, 0.3, 0.4]} color="#6d2e46" ribbon="#e5e5e5" rotation={-0.6} />
+      <Present position={[1.5, 0, 1.3]} size={[0.6, 0.45, 0.6]} color="#8b1e2b" accent="#a83242" pattern="stripes" ribbon="#d4af37" rotation={0.4} />
+      <Present position={[-1.4, 0, 1.5]} size={[0.5, 0.38, 0.5]} color="#1f3b5c" accent="#d8dde6" pattern="stars" ribbon="#e5e5e5" rotation={-0.3} />
+      <Present position={[0.25, 0, 2.05]} size={[0.42, 0.32, 0.42]} color="#e8e1d3" accent="#b3121b" pattern="dots" ribbon="#a4161a" rotation={0.9} />
+      <Present position={[-1.9, 0, -0.5]} size={[0.55, 0.55, 0.55]} color="#2f5d3a" accent="#8b1e2b" pattern="plaid" ribbon="#d4af37" rotation={0.2} />
+      <Present position={[1.95, 0, -0.4]} size={[0.4, 0.3, 0.4]} color="#6d2e46" accent="#d4af37" pattern="dots" ribbon="#e5e5e5" rotation={-0.6} />
     </group>
   );
 }
@@ -661,8 +817,8 @@ function Presents() {
 function TreeSkirt() {
   return (
     <mesh position={[0, 0.015, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-      <circleGeometry args={[1.25, 48]} />
-      <meshStandardMaterial color="#7a1420" roughness={0.95} />
+      <circleGeometry args={[1.25, 64]} />
+      <meshPhysicalMaterial color="#7a1420" roughness={0.9} sheen={1} sheenColor="#c0394b" sheenRoughness={0.6} />
     </mesh>
   );
 }
@@ -872,21 +1028,21 @@ function makeRoundTexture() {
   return new THREE.CanvasTexture(canvas);
 }
 
-function Snow({ count = 2200 }) {
+function Snow({ count = 2200, size = 0.08, seed = 7, speed = 1 }) {
   const ref = useRef();
   const flakeTex = useMemo(() => makeRoundTexture(), []);
   const { positions, speeds } = useMemo(() => {
-    const rand = seededRandom(7);
+    const rand = seededRandom(seed);
     const positions = new Float32Array(count * 3);
     const speeds = new Float32Array(count);
     for (let i = 0; i < count; i++) {
       positions[i * 3] = (rand() - 0.5) * 26;
       positions[i * 3 + 1] = rand() * 14;
       positions[i * 3 + 2] = (rand() - 0.5) * 26;
-      speeds[i] = 0.25 + rand() * 0.5;
+      speeds[i] = (0.25 + rand() * 0.5) * speed;
     }
     return { positions, speeds };
-  }, [count]);
+  }, [count, seed, speed]);
 
   useFrame((state, delta) => {
     if (!ref.current) return;
@@ -894,7 +1050,10 @@ function Snow({ count = 2200 }) {
     const t = state.clock.elapsedTime;
     for (let i = 0; i < count; i++) {
       arr[i * 3 + 1] -= speeds[i] * delta;
-      arr[i * 3] += Math.sin(t * 0.8 + i) * 0.0025;
+      // balanço do floco + leve vento constante
+      arr[i * 3] += Math.sin(t * 0.8 + i) * 0.0025 + delta * 0.12;
+      arr[i * 3 + 2] += Math.cos(t * 0.6 + i * 1.3) * 0.0018;
+      if (arr[i * 3] > 13) arr[i * 3] -= 26;
       if (arr[i * 3 + 1] < 0) arr[i * 3 + 1] = 14;
     }
     ref.current.geometry.attributes.position.needsUpdate = true;
@@ -908,12 +1067,112 @@ function Snow({ count = 2200 }) {
       <pointsMaterial
         map={flakeTex}
         color="#ffffff"
-        size={0.08}
+        size={size}
         transparent
         opacity={0.9}
         depthWrite={false}
       />
     </points>
+  );
+}
+
+/* ---------- Céu noturno em degradê e lua ---------- */
+
+function SkyDome() {
+  const material = useMemo(
+    () =>
+      new THREE.ShaderMaterial({
+        side: THREE.BackSide,
+        depthWrite: false,
+        fog: false,
+        uniforms: {
+          top: { value: new THREE.Color("#02040d") },
+          middle: { value: new THREE.Color("#0a1430") },
+          horizon: { value: new THREE.Color("#2a3a63") },
+          moonDir: { value: new THREE.Vector3(-0.55, 0.42, -0.72).normalize() },
+        },
+        vertexShader: `
+          varying vec3 vDir;
+          void main() {
+            vDir = normalize((modelMatrix * vec4(position, 1.0)).xyz);
+            gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform vec3 top;
+          uniform vec3 middle;
+          uniform vec3 horizon;
+          uniform vec3 moonDir;
+          varying vec3 vDir;
+          void main() {
+            float h = vDir.y;
+            vec3 col = mix(horizon, middle, smoothstep(-0.02, 0.25, h));
+            col = mix(col, top, smoothstep(0.25, 0.85, h));
+            // brilho suave do luar em volta da lua
+            float m = max(dot(normalize(vDir), moonDir), 0.0);
+            col += vec3(0.35, 0.42, 0.6) * pow(m, 18.0) * 0.6;
+            col += vec3(0.2, 0.25, 0.4) * pow(m, 4.0) * 0.12;
+            gl_FragColor = vec4(col, 1.0);
+          }
+        `,
+      }),
+    []
+  );
+
+  return (
+    <mesh material={material} renderOrder={-1}>
+      <sphereGeometry args={[180, 48, 24]} />
+    </mesh>
+  );
+}
+
+// Lua com crateras desenhadas em canvas e halo
+function Moon() {
+  const { surface, halo } = useMemo(() => {
+    const size = 256;
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const g = canvas.getContext("2d");
+    g.fillStyle = "#e9e6dc";
+    g.fillRect(0, 0, size, size);
+    const rand = seededRandom(9);
+    for (let i = 0; i < 70; i++) {
+      const r = 3 + rand() * 18;
+      g.fillStyle = `rgba(150, 150, 150, ${0.08 + rand() * 0.18})`;
+      g.beginPath();
+      g.arc(rand() * size, rand() * size, r, 0, Math.PI * 2);
+      g.fill();
+    }
+    const surface = new THREE.CanvasTexture(canvas);
+    surface.colorSpace = THREE.SRGBColorSpace;
+
+    const hc = document.createElement("canvas");
+    hc.width = 256;
+    hc.height = 256;
+    const hg = hc.getContext("2d");
+    const grad = hg.createRadialGradient(128, 128, 0, 128, 128, 128);
+    grad.addColorStop(0, "rgba(220, 230, 255, 0.55)");
+    grad.addColorStop(0.3, "rgba(170, 190, 255, 0.18)");
+    grad.addColorStop(1, "rgba(150, 170, 255, 0)");
+    hg.fillStyle = grad;
+    hg.fillRect(0, 0, 256, 256);
+    const halo = new THREE.CanvasTexture(hc);
+    return { surface, halo };
+  }, []);
+
+  const pos = new THREE.Vector3(-0.55, 0.42, -0.72).normalize().multiplyScalar(150);
+
+  return (
+    <group position={pos}>
+      <mesh>
+        <sphereGeometry args={[6, 48, 48]} />
+        <meshBasicMaterial map={surface} color="#fffbe8" fog={false} toneMapped={false} />
+      </mesh>
+      <sprite scale={[48, 48, 1]}>
+        <spriteMaterial map={halo} transparent depthWrite={false} blending={THREE.AdditiveBlending} fog={false} />
+      </sprite>
+    </group>
   );
 }
 
@@ -923,12 +1182,14 @@ export default function ChristmasScene() {
   return (
     <div className="scene">
       <Canvas
-        shadows
-        camera={{ position: [6, 4, 8], fov: 42 }}
+        shadows="soft"
+        camera={{ position: [6, 4, 8], fov: 42, far: 500 }}
         dpr={[1, 2]}
-        gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping }}
+        gl={{ antialias: false }}
       >
         <color attach="background" args={["#060a1a"]} />
+        <SkyDome />
+        <Moon />
         <fog attach="fog" args={["#060a1a", 14, 38]} />
 
         {/* reflexos gerados localmente (sem baixar HDR) para as bolas e a estrela */}
@@ -958,7 +1219,7 @@ export default function ChristmasScene() {
         <pointLight position={[-1.8, 1.4, -0.6]} intensity={4} distance={5} color="#ffb565" />
         <pointLight position={[0, 3.5, -2.5]} intensity={3} distance={6} color="#ffb565" />
 
-        <Stars radius={60} depth={40} count={3000} factor={4} fade speed={0.5} />
+        <Stars radius={90} depth={60} count={5000} factor={5} saturation={0.15} fade speed={0.4} />
 
         <group position={[0, -2.4, 0]}>
           <Trunk />
@@ -970,7 +1231,8 @@ export default function ChristmasScene() {
           <Presents />
           <Ground />
           <SnowGlitter />
-          <Snow />
+          <Snow count={2000} size={0.06} seed={7} />
+          <Snow count={450} size={0.13} seed={8} speed={1.4} />
         </group>
 
         <OrbitControls
@@ -983,6 +1245,14 @@ export default function ChristmasScene() {
           maxPolarAngle={Math.PI / 2.1}
           target={[0, 0.4, 0]}
         />
+
+        {/* acabamento de câmera: brilho real das luzes, vinheta e granulação sutil */}
+        <EffectComposer multisampling={4}>
+          <Bloom mipmapBlur luminanceThreshold={1} luminanceSmoothing={0.25} intensity={1.1} radius={0.7} />
+          <Noise opacity={0.025} blendFunction={BlendFunction.SOFT_LIGHT} />
+          <Vignette offset={0.3} darkness={0.55} />
+          <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
+        </EffectComposer>
       </Canvas>
     </div>
   );
